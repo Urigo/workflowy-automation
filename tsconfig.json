@@ -7,7 +7,9 @@
     "types": ["node"],
 
     // Type-check only — Node runs the .ts source directly via type stripping.
+    // Imports therefore use explicit .ts extensions, which needs allowing.
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     // Fail the check on any syntax Node's type stripping can't erase

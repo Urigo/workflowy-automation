@@ -104,10 +104,16 @@ network blip means it retries next poll rather than dropping the issue.
 
 ## Files
 
-| File            | Purpose                                            |
-|-----------------|----------------------------------------------------|
-| `src/index.ts`  | The whole app — run directly with `node`           |
-| `tsconfig.json` | Type-checker settings (`npm run typecheck`)        |
+| File               | Purpose                                            |
+|--------------------|----------------------------------------------------|
+| `src/index.ts`     | Entrypoint — CLI flags, startup banner, poll loop  |
+| `src/config.ts`    | Loads `.env` and validates all settings            |
+| `src/sync.ts`      | Core logic: diff issues against state, create tasks|
+| `src/github.ts`    | GitHub client — fetches a repo's open issues       |
+| `src/workflowy.ts` | Workflowy client — creates a task for an issue     |
+| `src/state.ts`     | Persists which issues are already done             |
+| `src/util.ts`      | Tiny shared helpers                                |
+| `tsconfig.json`    | Type-checker settings (`npm run typecheck`)        |
 | `.nvmrc`        | Pins the Node version for `nvm`/`fnm`              |
 | `.env`          | Your secrets & settings (never commit this)        |
 | `.env.example`  | Template to copy                                   |
