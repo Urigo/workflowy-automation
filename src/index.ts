@@ -5,19 +5,21 @@
  * Polls one or more GitHub repositories for newly opened issues and creates a
  * matching task in Workflowy for each one, using the official Workflowy API.
  *
- * Zero runtime dependencies — needs only Node 24+ (built-in fetch, native
- * .env loading, and import.meta.dirname). TypeScript is used at build time only.
+ * Zero runtime dependencies and no build step — Node 26+ runs this TypeScript
+ * file directly via native type stripping. Relies only on built-ins: fetch,
+ * native .env loading, import.meta.dirname, and util.parseArgs. TypeScript is
+ * used solely for type-checking (`npm run typecheck`).
  *
- * Run continuously:   node dist/index.js
- * Run once (for cron): node dist/index.js --once
+ * Run continuously:   node src/index.ts
+ * Run once (for cron): node src/index.ts --once
  */
 
 import { readFile, writeFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import path from "node:path";
 
-// import.meta.dirname resolves to dist/ at runtime; the .env / state files live
-// alongside the project root, one level up.
+// import.meta.dirname resolves to src/ at runtime; the .env / state files live
+// in the project root, one level up.
 const STATE_FILE = path.join(import.meta.dirname, "..", "state.json");
 const ENV_FILE = path.join(import.meta.dirname, "..", ".env");
 

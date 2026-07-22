@@ -1,19 +1,23 @@
 {
   "compilerOptions": {
-    "target": "ES2023",
-    "lib": ["ES2023"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "types": ["node"],
-    "outDir": "dist",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "declaration": false,
-    "sourceMap": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+
+    // Type-check only — Node runs the .ts source directly via type stripping.
+    "noEmit": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    // Fail the check on any syntax Node's type stripping can't erase
+    // (enums, namespaces, parameter properties, etc.).
+    "erasableSyntaxOnly": true
   },
   "include": ["src/**/*.ts"]
 }

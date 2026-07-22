@@ -10,17 +10,18 @@ or any always-on machine.
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) 24 or newer (`node --version` to check).
+- [Node.js](https://nodejs.org) 26 or newer (`node --version` to check).
   A [`.nvmrc`](.nvmrc) is included, so `nvm use` / `fnm use` picks the right
   version automatically.
 - A GitHub token with read access to the repos you want to watch
 - A Workflowy API key
 
-The app has **no runtime dependencies**. It's written in TypeScript and compiled
-to plain JavaScript that runs entirely on modern Node built-ins — `fetch`,
-native `.env` loading (`process.loadEnvFile`), `import.meta.dirname`, and
-`util.parseArgs`. TypeScript is only needed at build time (`npm install` pulls
-it in as a dev dependency).
+The app has **no runtime dependencies and no build step**. It's written in
+TypeScript, and Node 26 runs the `.ts` source directly via native type
+stripping. It leans entirely on modern Node built-ins — `fetch`, native `.env`
+loading (`process.loadEnvFile`), `import.meta.dirname`, and `util.parseArgs`.
+TypeScript is used only for type-checking (`npm run typecheck`), so
+`npm install` is optional unless you want that.
 
 ## Setup (5 minutes)
 
@@ -47,32 +48,26 @@ it in as a dev dependency).
    **Inbox**. To use a specific bullet instead, set `WORKFLOWY_PARENT_ID` to
    that bullet's node id.
 
-## Build it
-
-Compile the TypeScript to `dist/` once (or use `npm run dev` to watch):
-
-```bash
-npm install   # first time only — installs TypeScript
-npm run build
-```
-
 ## Run it
+
+No build needed — Node runs the TypeScript source directly.
 
 Poll continuously (checks every few minutes, keeps running):
 
 ```bash
 npm start
-# or, after building: node dist/index.js
+# or: node src/index.ts
 ```
 
 Check once and exit (handy for cron / scheduled tasks):
 
 ```bash
 npm run once
-# or, after building: node dist/index.js --once
+# or: node src/index.ts --once
 ```
 
-(`npm start` and `npm run once` rebuild automatically before running.)
+While developing, `npm run dev` (`node --watch src/index.ts`) restarts on save,
+and `npm run typecheck` runs the TypeScript type-checker.
 
 **First run:** existing open issues are recorded as a baseline and are *not*
 turned into tasks, so you won't get flooded. Only issues opened *after* that
@@ -81,12 +76,13 @@ point create tasks. To import all current open issues instead, set
 
 ## Keeping it running
 
-- **Simplest:** leave `node dist/index.js` running in a terminal on an
+- **Simplest:** leave `node src/index.ts` running in a terminal on an
   always-on machine.
-- **Cron (macOS/Linux):** build once, then run every 5 minutes via `--once`:
+- **Cron (macOS/Linux):** run every 5 minutes via `--once`. Use an absolute
+  path to a Node 26+ binary (cron's `PATH` is minimal):
 
   ```
-  */5 * * * * cd /Users/urigoldshtein/Developer/workflowy-sync && /usr/bin/env node dist/index.js --once >> sync.log 2>&1
+  */5 * * * * cd /Users/urigoldshtein/Developer/workflowy-sync && /usr/local/bin/node src/index.ts --once >> sync.log 2>&1
   ```
 
 ## How it avoids duplicates
@@ -99,9 +95,9 @@ network blip means it retries next poll rather than dropping the issue.
 
 | File            | Purpose                                            |
 |-----------------|----------------------------------------------------|
-| `src/index.ts`  | The whole app (TypeScript source)                  |
-| `dist/index.js` | Compiled output — what actually runs (`npm run build`) |
-| `tsconfig.json` | TypeScript compiler settings                       |
+| `src/index.ts`  | The whole app — run directly with `node`           |
+| `tsconfig.json` | Type-checker settings (`npm run typecheck`)        |
+| `.nvmrc`        | Pins the Node version for `nvm`/`fnm`              |
 | `.env`          | Your secrets & settings (never commit this)        |
 | `.env.example`  | Template to copy                                   |
 | `state.json`    | Auto-created; tracks which issues are done         |
