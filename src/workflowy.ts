@@ -58,6 +58,11 @@ export async function createWorkflowyTask(issue: GitHubIssue, repo: string): Pro
   return taskId;
 }
 
+/** Marks a node complete (issue closed) or uncomplete (issue reopened). */
+export async function setNodeCompleted(nodeId: string, completed: boolean): Promise<void> {
+  await workflowy.post(`nodes/${nodeId}/${completed ? "complete" : "uncomplete"}`);
+}
+
 /** Adds one issue comment as a sub-bullet under the issue's task. */
 export async function createCommentBullet(taskId: string, comment: IssueComment): Promise<void> {
   const when = comment.created_at.slice(0, 16).replace("T", " ");

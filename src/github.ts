@@ -62,6 +62,18 @@ export async function fetchRepoComments(repo: string, since: string) {
   });
 }
 
+/** One issue's current state — used to confirm a vanished issue was closed. */
+export async function fetchIssue(repo: string, issueNumber: number) {
+  const parsed = parseRepo(repo);
+  if (!parsed) return undefined;
+  const { data } = await octokit.rest.issues.get({
+    owner: parsed.owner,
+    repo: parsed.name,
+    issue_number: issueNumber,
+  });
+  return data;
+}
+
 /** Extracts the issue number from a comment's issue_url. */
 export function issueNumberFromUrl(issueUrl: string): number | undefined {
   const match = /\/issues\/(\d+)$/.exec(issueUrl);

@@ -8,6 +8,8 @@ your GitHub repositories — and keep it updated as the conversation continues:
 - **New comment on an issue that isn't in Workflowy yet** (e.g. one that
   predates the sync) → the issue's task is created retroactively, with all of
   its existing comments brought along.
+- **Issue closed** → its task is marked complete; **reopened** → the task is
+  brought back.
 
 It works by **polling**: every few minutes the app asks GitHub for new issues
 and creates a matching task in Workflowy via the official Workflowy API. No

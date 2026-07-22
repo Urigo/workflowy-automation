@@ -2,6 +2,7 @@
 
 import { env, repos } from "./config.ts";
 import {
+  fetchIssue,
   fetchIssueComments,
   fetchOpenIssues,
   fetchRepoComments,
@@ -10,12 +11,16 @@ import {
 } from "./github.ts";
 import { db, type RepoState } from "./state.ts";
 import { errorMessage } from "./util.ts";
-import { createCommentBullet, createWorkflowyTask } from "./workflowy.ts";
+import { createCommentBullet, createWorkflowyTask, setNodeCompleted } from "./workflowy.ts";
 
 interface SyncCounts {
   tasks: number;
   comments: number;
+  completed: number;
+  reopened: number;
 }
+
+const zeroCounts = (): SyncCounts => ({ tasks: 0, comments: 0, completed: 0, reopened: 0 });
 
 /**
  * Creates the Workflowy task for an issue, imports every comment the issue
@@ -62,7 +67,7 @@ async function syncNewIssues(
   // Process oldest first so tasks appear in chronological order.
   const fresh = issues.filter((i) => !seen.has(i.number)).reverse();
 
-  const counts: SyncCounts = { tasks: 0, comments: 0 };
+  const counts = zeroCounts();
   for (const issue of fresh) {
     try {
       counts.comments += await trackIssue(repo, repoState, issue);
@@ -91,11 +96,11 @@ async function syncComments(
     // Migration from a pre-comment-sync state file: start watching from now.
     repoState.commentsSince = new Date().toISOString();
     await db.write();
-    return { tasks: 0, comments: 0 };
+    return zeroCounts();
   }
 
   const seenComments = (repoState.seenComments ??= []);
-  const counts: SyncCounts = { tasks: 0, comments: 0 };
+  const counts = zeroCounts();
   let watermark = since;
 
   for (const comment of await fetchRepoComments(repo, since)) {
@@ -140,6 +145,58 @@ async function syncComments(
   return counts;
 }
 
+/**
+ * Marks tasks complete for tracked issues that got closed, and uncompletes
+ * them when an issue is reopened. A tracked issue missing from the open list
+ * is confirmed via a direct fetch before its task is completed.
+ */
+async function syncClosedIssues(
+  repo: string,
+  repoState: RepoState,
+  issuesByNumber: Map<number, GitHubIssue>,
+): Promise<SyncCounts> {
+  const counts = zeroCounts();
+  const completed = (repoState.completedIssues ??= []);
+
+  for (const [key, taskId] of Object.entries(repoState.taskIds ?? {})) {
+    const issueNumber = Number(key);
+    const isOpen = issuesByNumber.has(issueNumber);
+    const isCompleted = completed.includes(issueNumber);
+
+    try {
+      if (isOpen && isCompleted) {
+        // Issue was reopened: bring the task back.
+        await setNodeCompleted(taskId, false);
+        repoState.completedIssues = completed.filter((n) => n !== issueNumber);
+        counts.reopened += 1;
+        await db.write();
+        console.log(`↩️  ${repo}#${issueNumber} reopened → Workflowy task uncompleted.`);
+      } else if (!isOpen && !isCompleted) {
+        // Vanished from the open list — confirm it's actually closed
+        // (and not, say, transferred) before completing the task.
+        const issue = await fetchIssue(repo, issueNumber);
+        if (issue?.state !== "closed") continue;
+        await setNodeCompleted(taskId, true);
+        completed.push(issueNumber);
+        counts.completed += 1;
+        await db.write();
+        console.log(`☑️  ${repo}#${issueNumber} closed → Workflowy task completed.`);
+      }
+    } catch (err) {
+      // Leave state untouched so this issue is retried on the next poll.
+      console.error(`❌ Failed to update completion for ${repo}#${issueNumber}: ${errorMessage(err)}`);
+    }
+  }
+  return counts;
+}
+
+function addCounts(target: SyncCounts, add: SyncCounts): void {
+  target.tasks += add.tasks;
+  target.comments += add.comments;
+  target.completed += add.completed;
+  target.reopened += add.reopened;
+}
+
 async function syncRepo(repo: string): Promise<SyncCounts> {
   const repoState = (db.data.repos[repo] ??= { initialized: false, seen: [] });
 
@@ -154,24 +211,21 @@ async function syncRepo(repo: string): Promise<SyncCounts> {
     repoState.commentsSince = new Date().toISOString();
     await db.write();
     console.log(`📌 ${repo}: baseline set (${issues.length} existing open issue(s) marked as seen).`);
-    return { tasks: 0, comments: 0 };
+    return zeroCounts();
   }
 
-  const fromIssues = await syncNewIssues(repo, repoState, issues);
-  const fromComments = await syncComments(repo, repoState, issuesByNumber);
-  return {
-    tasks: fromIssues.tasks + fromComments.tasks,
-    comments: fromIssues.comments + fromComments.comments,
-  };
+  const counts = zeroCounts();
+  addCounts(counts, await syncNewIssues(repo, repoState, issues));
+  addCounts(counts, await syncComments(repo, repoState, issuesByNumber));
+  addCounts(counts, await syncClosedIssues(repo, repoState, issuesByNumber));
+  return counts;
 }
 
 export async function runOnce(): Promise<void> {
-  const total: SyncCounts = { tasks: 0, comments: 0 };
+  const total = zeroCounts();
   for (const repo of repos) {
     try {
-      const counts = await syncRepo(repo);
-      total.tasks += counts.tasks;
-      total.comments += counts.comments;
+      addCounts(total, await syncRepo(repo));
     } catch (err) {
       console.error(`❌ Error syncing ${repo}: ${errorMessage(err)}`);
     }
@@ -180,7 +234,9 @@ export async function runOnce(): Promise<void> {
   const parts = [
     ...(total.tasks > 0 ? [`${total.tasks} new task(s)`] : []),
     ...(total.comments > 0 ? [`${total.comments} comment(s)`] : []),
+    ...(total.completed > 0 ? [`${total.completed} completed`] : []),
+    ...(total.reopened > 0 ? [`${total.reopened} reopened`] : []),
   ];
-  if (parts.length > 0) console.log(`[${stamp}] Done — ${parts.join(", ")} created.`);
+  if (parts.length > 0) console.log(`[${stamp}] Done — ${parts.join(", ")}.`);
   else console.log(`[${stamp}] Checked ${repos.length} repo(s) — nothing new.`);
 }

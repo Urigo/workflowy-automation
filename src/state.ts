@@ -12,6 +12,8 @@ export interface RepoState {
   taskIds?: Record<string, string>;
   /** GitHub comment ids already processed (synced or deliberately skipped). */
   seenComments?: number[];
+  /** Issue numbers whose Workflowy task is currently marked complete. */
+  completedIssues?: number[];
   /**
    * Fetch optimization only — comments updated after this are requested from
    * GitHub. Whether a comment is new is always decided by id via seenComments.
