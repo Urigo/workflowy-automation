@@ -5,11 +5,6 @@
     "module": "nodenext",
     "moduleResolution": "nodenext",
     "types": ["node"],
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
 
     // Type-check only — Node runs the .ts source directly via type stripping.
     "noEmit": true,
@@ -17,7 +12,24 @@
     "verbatimModuleSyntax": true,
     // Fail the check on any syntax Node's type stripping can't erase
     // (enums, namespaces, parameter properties, etc.).
-    "erasableSyntaxOnly": true
+    "erasableSyntaxOnly": true,
+
+    // Maximum strictness
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitReturns": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    "forceConsistentCasingInFileNames": true,
+
+    // Check the types of dependencies too, not just our own code.
+    "skipLibCheck": false
   },
   "include": ["src/**/*.ts"]
 }

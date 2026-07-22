@@ -75,15 +75,10 @@ const workflowy = ky.extend({
   retry: 2,
 });
 
-/** The subset of the GitHub issue payload this app relies on. */
-interface GitHubIssue {
-  number: number;
-  title: string;
-  html_url: string;
-  user?: { login?: string } | null;
-}
+/** Exact issue type from octokit's response — no hand-written approximation. */
+type GitHubIssue = Awaited<ReturnType<typeof fetchOpenIssues>>[number];
 
-async function fetchOpenIssues(repo: string): Promise<GitHubIssue[]> {
+async function fetchOpenIssues(repo: string) {
   const [owner, name] = repo.split("/");
   if (!owner || !name) {
     console.error(`⚠️  Skipping malformed repo entry "${repo}" (expected "owner/name").`);
