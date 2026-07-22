@@ -1,7 +1,13 @@
 # Workflowy ← GitHub Issues
 
 Automatically create a Workflowy task whenever someone opens an issue on one of
-your GitHub repositories.
+your GitHub repositories — and keep it updated as the conversation continues:
+
+- **New issue** → a task bullet, with the issue description as a sub-bullet.
+- **New comment** on a tracked issue → a `💬` sub-bullet under its task.
+- **New comment on an issue that isn't in Workflowy yet** (e.g. one that
+  predates the sync) → the issue's task is created retroactively, with all of
+  its existing comments brought along.
 
 It works by **polling**: every few minutes the app asks GitHub for new issues
 and creates a matching task in Workflowy via the official Workflowy API. No
@@ -98,9 +104,12 @@ point create tasks. To import all current open issues instead, set
 
 ## How it avoids duplicates
 
-Processed issue numbers are stored per-repo in `state.json`. A task is only
-marked "seen" after it's successfully created in Workflowy, so a crash or
-network blip means it retries next poll rather than dropping the issue.
+Processed issue numbers, comment ids, and each issue's Workflowy node id are
+stored per-repo in `state.json`. Everything is tracked **by id** — an issue or
+comment is only recorded after its bullet is successfully created in Workflowy,
+so a crash or network blip means it retries next poll rather than dropping or
+duplicating anything. (A timestamp is also kept per repo, but only to narrow
+the GitHub comments query — it never decides what's new.)
 
 ## Files
 

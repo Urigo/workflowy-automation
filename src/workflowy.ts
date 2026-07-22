@@ -2,7 +2,7 @@
 
 import ky from "ky";
 import { env } from "./config.ts";
-import type { GitHubIssue } from "./github.ts";
+import type { GitHubIssue, IssueComment } from "./github.ts";
 
 const workflowy = ky.extend({
   baseUrl: "https://workflowy.com/api/v1/",
@@ -56,4 +56,15 @@ export async function createWorkflowyTask(issue: GitHubIssue, repo: string): Pro
   }
 
   return taskId;
+}
+
+/** Adds one issue comment as a sub-bullet under the issue's task. */
+export async function createCommentBullet(taskId: string, comment: IssueComment): Promise<void> {
+  const when = comment.created_at.slice(0, 16).replace("T", " ");
+  await createNode({
+    parent_id: taskId,
+    name: `💬 @${comment.user?.login ?? "unknown"} · ${when}`,
+    note: [comment.body?.trim(), comment.html_url].filter(Boolean).join("\n\n"),
+    position: "bottom",
+  });
 }

@@ -1,4 +1,4 @@
-/** GitHub client: fetches the open issues of a repository. */
+/** GitHub client: fetches open issues and issue comments. */
 
 import { Octokit } from "octokit";
 import { env } from "./config.ts";
@@ -8,18 +8,62 @@ const octokit = new Octokit({ auth: env.GITHUB_TOKEN });
 /** Exact issue type from octokit's response — no hand-written approximation. */
 export type GitHubIssue = Awaited<ReturnType<typeof fetchOpenIssues>>[number];
 
-export async function fetchOpenIssues(repo: string) {
+/** Exact comment type from octokit's response. */
+export type IssueComment = Awaited<ReturnType<typeof fetchIssueComments>>[number];
+
+function parseRepo(repo: string): { owner: string; name: string } | undefined {
   const [owner, name] = repo.split("/");
   if (!owner || !name) {
     console.error(`⚠️  Skipping malformed repo entry "${repo}" (expected "owner/name").`);
-    return [];
+    return undefined;
   }
+  return { owner, name };
+}
+
+export async function fetchOpenIssues(repo: string) {
+  const parsed = parseRepo(repo);
+  if (!parsed) return [];
   const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
-    owner,
-    repo: name,
+    owner: parsed.owner,
+    repo: parsed.name,
     state: "open",
     per_page: 100,
   });
   // The issues endpoint also returns pull requests; filter them out.
   return issues.filter((i) => !i.pull_request);
+}
+
+/** All comments of a single issue, oldest first. */
+export async function fetchIssueComments(repo: string, issueNumber: number) {
+  const parsed = parseRepo(repo);
+  if (!parsed) return [];
+  return octokit.paginate(octokit.rest.issues.listComments, {
+    owner: parsed.owner,
+    repo: parsed.name,
+    issue_number: issueNumber,
+    per_page: 100,
+  });
+}
+
+/**
+ * All issue comments of a repo updated after `since`, oldest first.
+ * (Includes comments on pull requests and closed issues — callers filter.)
+ */
+export async function fetchRepoComments(repo: string, since: string) {
+  const parsed = parseRepo(repo);
+  if (!parsed) return [];
+  return octokit.paginate(octokit.rest.issues.listCommentsForRepo, {
+    owner: parsed.owner,
+    repo: parsed.name,
+    since,
+    sort: "updated",
+    direction: "asc",
+    per_page: 100,
+  });
+}
+
+/** Extracts the issue number from a comment's issue_url. */
+export function issueNumberFromUrl(issueUrl: string): number | undefined {
+  const match = /\/issues\/(\d+)$/.exec(issueUrl);
+  return match?.[1] === undefined ? undefined : Number(match[1]);
 }
