@@ -16,18 +16,28 @@ or any always-on machine.
 - A GitHub token with read access to the repos you want to watch
 - A Workflowy API key
 
-The app has **no runtime dependencies and no build step**. It's written in
-TypeScript, and Node 26 runs the `.ts` source directly via native type
-stripping. It leans entirely on modern Node built-ins — `fetch`, native `.env`
-loading (`process.loadEnvFile`), `import.meta.dirname`, and `util.parseArgs`.
-TypeScript is used only for type-checking (`npm run typecheck`), so
-`npm install` is optional unless you want that.
+The app has **no build step** — it's written in TypeScript and Node 26 runs
+the `.ts` source directly via native type stripping. The generic plumbing is
+delegated to focused, well-maintained packages so the source contains only the
+actual sync logic:
+
+| Package   | Job                                                    |
+|-----------|--------------------------------------------------------|
+| `octokit` | Official GitHub SDK — auth, pagination, retries        |
+| `ky`      | HTTP client for the Workflowy API — timeouts, retries  |
+| `envalid` | Validates `.env` config, with defaults and clear errors|
+| `lowdb`   | Persists `state.json`                                  |
+| `meow`    | CLI flags and `--help`                                 |
+| `dotenv`  | Loads `.env`                                           |
+
+TypeScript itself is only used for type-checking (`npm run typecheck`).
 
 ## Setup (5 minutes)
 
-1. **Copy the config template:**
+1. **Install dependencies and copy the config template:**
 
    ```bash
+   npm install
    cp .env.example .env
    ```
 
@@ -51,6 +61,7 @@ TypeScript is used only for type-checking (`npm run typecheck`), so
 ## Run it
 
 No build needed — Node runs the TypeScript source directly.
+(`node src/index.ts --help` shows the CLI usage.)
 
 Poll continuously (checks every few minutes, keeps running):
 

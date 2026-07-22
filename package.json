@@ -31,5 +31,13 @@
     "@types/node": "26.1.1",
     "typescript": "7.0.2"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "17.4.2",
+    "envalid": "8.2.0",
+    "ky": "2.0.2",
+    "lowdb": "7.0.1",
+    "meow": "14.1.0",
+    "octokit": "5.0.5"
+  }
 }

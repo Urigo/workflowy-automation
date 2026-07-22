@@ -5,48 +5,75 @@
  * Polls one or more GitHub repositories for newly opened issues and creates a
  * matching task in Workflowy for each one, using the official Workflowy API.
  *
- * Zero runtime dependencies and no build step — Node 26+ runs this TypeScript
- * file directly via native type stripping. Relies only on built-ins: fetch,
- * native .env loading, import.meta.dirname, and util.parseArgs. TypeScript is
- * used solely for type-checking (`npm run typecheck`).
- *
- * Run continuously:   node src/index.ts
- * Run once (for cron): node src/index.ts --once
+ * The heavy lifting is delegated to focused packages — octokit (GitHub),
+ * ky (HTTP), envalid (config), lowdb (state), meow (CLI), dotenv (.env) —
+ * so this file only contains the actual sync logic. Node 26+ runs it
+ * directly via native type stripping; `npm run typecheck` type-checks.
  */
 
-import { readFile, writeFile } from "node:fs/promises";
-import { parseArgs } from "node:util";
 import path from "node:path";
+import { config as loadDotenv } from "dotenv";
+import { bool, cleanEnv, num, str } from "envalid";
+import ky from "ky";
+import { JSONFilePreset } from "lowdb/node";
+import meow from "meow";
+import { Octokit } from "octokit";
 
-// import.meta.dirname resolves to src/ at runtime; the .env / state files live
-// in the project root, one level up.
-const STATE_FILE = path.join(import.meta.dirname, "..", "state.json");
-const ENV_FILE = path.join(import.meta.dirname, "..", ".env");
-
-/** How long to wait on any single API request before giving up. */
-const REQUEST_TIMEOUT_MS = 30_000;
+const ROOT = path.join(import.meta.dirname, "..");
 
 // ---------------------------------------------------------------------------
-// Types
+// CLI, config, state
 // ---------------------------------------------------------------------------
-interface Config {
-  githubToken: string;
-  workflowyApiKey: string;
-  repos: string[];
-  parentId: string;
-  layoutMode: string;
-  pollIntervalMinutes: number;
-  backfillExisting: boolean;
-}
+const cli = meow(
+  `
+  Usage
+    $ workflowy-github-sync            Poll continuously
+    $ workflowy-github-sync --once     Check once and exit (for cron)
+`,
+  {
+    importMeta: import.meta,
+    flags: { once: { type: "boolean", default: false } },
+  },
+);
+
+loadDotenv({ path: path.join(ROOT, ".env"), quiet: true });
+
+const env = cleanEnv(process.env, {
+  GITHUB_TOKEN: str({ desc: "GitHub token with read access to the repos" }),
+  WORKFLOWY_API_KEY: str({ desc: "API key from https://workflowy.com/api-key" }),
+  GITHUB_REPOS: str({ desc: 'Comma-separated repos, e.g. "my-org/api, my-org/web"' }),
+  // Where new tasks land in Workflowy. "inbox" = your Workflowy Inbox.
+  WORKFLOWY_PARENT_ID: str({ default: "inbox" }),
+  WORKFLOWY_LAYOUT_MODE: str({ default: "todo" }),
+  POLL_INTERVAL_MINUTES: num({ default: 5 }),
+  // On the very first run, don't create tasks for issues that already exist —
+  // just record them as "seen". Set BACKFILL_EXISTING=true to import them.
+  BACKFILL_EXISTING: bool({ default: false }),
+});
+
+const repos = env.GITHUB_REPOS.split(",").map((r) => r.trim()).filter(Boolean);
 
 interface RepoState {
   initialized: boolean;
   seen: number[];
 }
 
-interface State {
-  repos: Record<string, RepoState>;
-}
+const db = await JSONFilePreset<{ repos: Record<string, RepoState> }>(
+  path.join(ROOT, "state.json"),
+  { repos: {} },
+);
+
+// ---------------------------------------------------------------------------
+// API clients
+// ---------------------------------------------------------------------------
+const octokit = new Octokit({ auth: env.GITHUB_TOKEN });
+
+const workflowy = ky.extend({
+  baseUrl: "https://workflowy.com/api/v1/",
+  headers: { Authorization: `Bearer ${env.WORKFLOWY_API_KEY}` },
+  timeout: 30_000,
+  retry: 2,
+});
 
 /** The subset of the GitHub issue payload this app relies on. */
 interface GitHubIssue {
@@ -54,250 +81,110 @@ interface GitHubIssue {
   title: string;
   html_url: string;
   user?: { login?: string } | null;
-  /** Present when the "issue" is actually a pull request. */
-  pull_request?: unknown;
 }
 
-// ---------------------------------------------------------------------------
-// Config
-// ---------------------------------------------------------------------------
-function getConfig(): Config {
-  const required = (name: string): string => {
-    const v = process.env[name];
-    if (!v) {
-      console.error(`\n❌ Missing required setting "${name}". Add it to your .env file.\n`);
-      process.exit(1);
-    }
-    return v;
-  };
-
-  const repos = (process.env.GITHUB_REPOS ?? "")
-    .split(",")
-    .map((r) => r.trim())
-    .filter(Boolean);
-
-  if (repos.length === 0) {
-    console.error(`\n❌ No repositories configured. Set GITHUB_REPOS in .env (e.g. "my-org/api, my-org/web").\n`);
-    process.exit(1);
-  }
-
-  return {
-    githubToken: required("GITHUB_TOKEN"),
-    workflowyApiKey: required("WORKFLOWY_API_KEY"),
-    repos,
-    // Where new tasks land in Workflowy. "inbox" = your Workflowy Inbox.
-    parentId: process.env.WORKFLOWY_PARENT_ID || "inbox",
-    layoutMode: process.env.WORKFLOWY_LAYOUT_MODE || "todo",
-    pollIntervalMinutes: Number(process.env.POLL_INTERVAL_MINUTES || 5),
-    // On the very first run, don't create tasks for issues that already exist —
-    // just record them as "seen". Set BACKFILL_EXISTING=true to import them.
-    backfillExisting: /^true$/i.test(process.env.BACKFILL_EXISTING ?? ""),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// State (which issues we've already turned into tasks)
-// ---------------------------------------------------------------------------
-async function loadState(): Promise<State> {
-  try {
-    return JSON.parse(await readFile(STATE_FILE, "utf8")) as State;
-  } catch {
-    // Missing or malformed file — start from an empty baseline.
-    return { repos: {} };
-  }
-}
-
-async function saveState(state: State): Promise<void> {
-  await writeFile(STATE_FILE, JSON.stringify(state, null, 2));
-}
-
-// ---------------------------------------------------------------------------
-// GitHub
-// ---------------------------------------------------------------------------
-async function fetchOpenIssues(repo: string, token: string): Promise<GitHubIssue[]> {
+async function fetchOpenIssues(repo: string): Promise<GitHubIssue[]> {
   const [owner, name] = repo.split("/");
   if (!owner || !name) {
     console.error(`⚠️  Skipping malformed repo entry "${repo}" (expected "owner/name").`);
     return [];
   }
-
-  const issues: GitHubIssue[] = [];
-  let page = 1;
-  // GitHub returns pull requests from the issues endpoint too, so we filter them.
-  while (true) {
-    const url =
-      `https://api.github.com/repos/${owner}/${name}/issues` +
-      `?state=open&sort=created&direction=desc&per_page=100&page=${page}`;
-    const res = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "workflowy-github-sync",
-      },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`GitHub API ${res.status} for ${repo}: ${body.slice(0, 300)}`);
-    }
-
-    const batch = (await res.json()) as GitHubIssue[];
-    for (const item of batch) {
-      if (item.pull_request) continue; // it's a PR, not an issue
-      issues.push(item);
-    }
-    if (batch.length < 100) break;
-    page += 1;
-    if (page > 10) break; // safety cap: 1000 issues per poll
-  }
-  return issues;
-}
-
-// ---------------------------------------------------------------------------
-// Workflowy
-// ---------------------------------------------------------------------------
-async function createWorkflowyTask(
-  issue: GitHubIssue,
-  repo: string,
-  cfg: Config,
-): Promise<unknown> {
-  const name = `${issue.title}  ·  ${repo}#${issue.number}`;
-  const noteLines = [
-    `${repo}#${issue.number} opened by @${issue.user?.login ?? "unknown"}`,
-    issue.html_url,
-  ];
-  const body = {
-    parent_id: cfg.parentId,
-    name,
-    note: noteLines.join("\n"),
-    layoutMode: cfg.layoutMode,
-    position: "bottom",
-  };
-
-  const res = await fetch("https://workflowy.com/api/v1/nodes", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${cfg.workflowyApiKey}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
+    owner,
+    repo: name,
+    state: "open",
+    per_page: 100,
   });
+  // The issues endpoint also returns pull requests; filter them out.
+  return issues.filter((i) => !i.pull_request);
+}
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Workflowy API ${res.status}: ${text.slice(0, 300)}`);
-  }
-  return res.json();
+async function createWorkflowyTask(issue: GitHubIssue, repo: string): Promise<void> {
+  await workflowy.post("nodes", {
+    json: {
+      parent_id: env.WORKFLOWY_PARENT_ID,
+      name: `${issue.title}  ·  ${repo}#${issue.number}`,
+      note: [
+        `${repo}#${issue.number} opened by @${issue.user?.login ?? "unknown"}`,
+        issue.html_url,
+      ].join("\n"),
+      layoutMode: env.WORKFLOWY_LAYOUT_MODE,
+      position: "bottom",
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
-// Core sync for a single repo
+// Core sync
 // ---------------------------------------------------------------------------
-async function syncRepo(repo: string, cfg: Config, state: State): Promise<number> {
-  const repoState: RepoState = state.repos[repo] ?? { initialized: false, seen: [] };
+async function syncRepo(repo: string): Promise<number> {
+  const repoState = (db.data.repos[repo] ??= { initialized: false, seen: [] });
   const seen = new Set(repoState.seen);
 
-  const issues = await fetchOpenIssues(repo, cfg.githubToken);
-  // Process oldest first so tasks appear in chronological order.
-  const fresh = issues.filter((i) => !seen.has(i.number)).reverse();
+  const issues = await fetchOpenIssues(repo);
 
-  if (!repoState.initialized && !cfg.backfillExisting) {
+  if (!repoState.initialized && !env.BACKFILL_EXISTING) {
     // First time we see this repo: record existing issues as a baseline
     // instead of flooding Workflowy with every open issue.
-    for (const i of issues) seen.add(i.number);
     repoState.initialized = true;
-    repoState.seen = [...seen];
-    state.repos[repo] = repoState;
+    repoState.seen = issues.map((i) => i.number);
+    await db.write();
     console.log(`📌 ${repo}: baseline set (${issues.length} existing open issue(s) marked as seen).`);
     return 0;
   }
 
+  // Process oldest first so tasks appear in chronological order.
+  const fresh = issues.filter((i) => !seen.has(i.number)).reverse();
+
   let created = 0;
   for (const issue of fresh) {
     try {
-      await createWorkflowyTask(issue, repo, cfg);
+      await createWorkflowyTask(issue, repo);
       seen.add(issue.number);
       created += 1;
-      console.log(`✅ ${repo}#${issue.number} → Workflowy task created: "${issue.title}"`);
       // Persist after each success so a crash never re-creates a task.
       repoState.initialized = true;
       repoState.seen = [...seen];
-      state.repos[repo] = repoState;
-      await saveState(state);
+      await db.write();
+      console.log(`✅ ${repo}#${issue.number} → Workflowy task created: "${issue.title}"`);
     } catch (err) {
-      console.error(`❌ Failed to create task for ${repo}#${issue.number}: ${errorMessage(err)}`);
       // Leave it unseen so we retry on the next poll.
+      console.error(`❌ Failed to create task for ${repo}#${issue.number}: ${errorMessage(err)}`);
     }
   }
-
-  repoState.initialized = true;
-  repoState.seen = [...seen];
-  state.repos[repo] = repoState;
   return created;
 }
 
-async function runOnce(cfg: Config): Promise<void> {
-  const state = await loadState();
+async function runOnce(): Promise<void> {
   let total = 0;
-  for (const repo of cfg.repos) {
+  for (const repo of repos) {
     try {
-      total += await syncRepo(repo, cfg, state);
+      total += await syncRepo(repo);
     } catch (err) {
       console.error(`❌ Error syncing ${repo}: ${errorMessage(err)}`);
     }
   }
-  await saveState(state);
   const stamp = new Date().toISOString();
   if (total > 0) console.log(`[${stamp}] Done — ${total} new task(s) created.`);
-  else console.log(`[${stamp}] Checked ${cfg.repos.length} repo(s) — no new issues.`);
+  else console.log(`[${stamp}] Checked ${repos.length} repo(s) — no new issues.`);
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-/** Load .env (if present) using Node's built-in parser; real env vars win. */
-function loadEnv(): void {
-  try {
-    process.loadEnvFile(ENV_FILE);
-  } catch {
-    // No .env file — rely on the real environment.
-  }
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
-async function main(): Promise<void> {
-  loadEnv();
-  const cfg = getConfig();
-  const { values } = parseArgs({ options: { once: { type: "boolean", default: false } } });
-  const once = values.once;
+console.log(`workflowy-github-sync`);
+console.log(`  Repos:     ${repos.join(", ")}`);
+console.log(`  Workflowy: new tasks → "${env.WORKFLOWY_PARENT_ID}" (${env.WORKFLOWY_LAYOUT_MODE})`);
+console.log(`  Mode:      ${cli.flags.once ? "run once" : `poll every ${env.POLL_INTERVAL_MINUTES} min`}\n`);
 
-  console.log(`workflowy-github-sync`);
-  console.log(`  Repos:     ${cfg.repos.join(", ")}`);
-  console.log(`  Workflowy: new tasks → "${cfg.parentId}" (${cfg.layoutMode})`);
-  console.log(`  Mode:      ${once ? "run once" : `poll every ${cfg.pollIntervalMinutes} min`}\n`);
-
-  if (once) {
-    await runOnce(cfg);
-    return;
-  }
-
-  // Continuous loop
-  await runOnce(cfg);
-  setInterval(() => {
-    runOnce(cfg).catch((err) => console.error(`Poll error: ${errorMessage(err)}`));
-  }, cfg.pollIntervalMinutes * 60 * 1000);
+await runOnce();
+if (!cli.flags.once) {
+  setInterval(
+    () => runOnce().catch((err) => console.error(`Poll error: ${errorMessage(err)}`)),
+    env.POLL_INTERVAL_MINUTES * 60 * 1000,
+  );
 }
-
-main().catch((err) => {
-  console.error(`Fatal: ${errorMessage(err)}`);
-  process.exit(1);
-});
