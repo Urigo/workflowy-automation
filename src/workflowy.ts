@@ -1,4 +1,4 @@
-/** Workflowy client: creates a task for a GitHub issue. */
+/** Workflowy client: creates a task (plus description sub-bullet) for a GitHub issue. */
 
 import ky from "ky";
 import { env } from "./config.ts";
@@ -11,17 +11,49 @@ const workflowy = ky.extend({
   retry: 2,
 });
 
-export async function createWorkflowyTask(issue: GitHubIssue, repo: string): Promise<void> {
-  await workflowy.post("nodes", {
-    json: {
-      parent_id: env.WORKFLOWY_PARENT_ID,
-      name: `${issue.title}  ·  ${repo}#${issue.number}`,
-      note: [
-        `${repo}#${issue.number} opened by @${issue.user?.login ?? "unknown"}`,
-        issue.html_url,
-      ].join("\n"),
-      layoutMode: env.WORKFLOWY_LAYOUT_MODE,
-      position: "bottom",
-    },
+interface CreateNodeResponse {
+  item_id: string;
+}
+
+interface NewNode {
+  parent_id: string;
+  name: string;
+  note?: string;
+  layoutMode?: string;
+  position?: string;
+}
+
+/** Creates a single Workflowy node and returns its id. */
+async function createNode(node: NewNode): Promise<string> {
+  const { item_id } = await workflowy.post("nodes", { json: node }).json<CreateNodeResponse>();
+  return item_id;
+}
+
+/** Creates the task bullet for an issue; returns the created task's node id. */
+export async function createWorkflowyTask(issue: GitHubIssue, repo: string): Promise<string> {
+  const taskId = await createNode({
+    parent_id: env.WORKFLOWY_PARENT_ID,
+    name: `${issue.title}  ·  ${repo}#${issue.number}`,
+    note: [
+      `${repo}#${issue.number} opened by @${issue.user?.login ?? "unknown"}`,
+      issue.html_url,
+    ].join("\n"),
+    layoutMode: env.WORKFLOWY_LAYOUT_MODE,
+    position: "bottom",
   });
+
+  // The issue description lives in a sub-bullet under the task.
+  const body = issue.body?.trim();
+  if (body) {
+    try {
+      await createNode({ parent_id: taskId, name: "Description", note: body });
+    } catch (err) {
+      // The task itself exists — don't fail (and later duplicate) it over the
+      // description; just note what happened.
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`⚠️  ${repo}#${issue.number}: task created but description sub-bullet failed: ${message}`);
+    }
+  }
+
+  return taskId;
 }
