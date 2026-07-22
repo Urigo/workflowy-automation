@@ -5,21 +5,24 @@
  * Polls one or more GitHub repositories for newly opened issues and creates a
  * matching task in Workflowy for each one, using the official Workflowy API.
  *
- * Zero runtime dependencies — needs only Node 18+ (built-in fetch).
- * TypeScript is used at build time only.
+ * Zero runtime dependencies — needs only Node 24+ (built-in fetch, native
+ * .env loading, and import.meta.dirname). TypeScript is used at build time only.
  *
  * Run continuously:   node dist/index.js
  * Run once (for cron): node dist/index.js --once
  */
 
 import { readFile, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { parseArgs } from "node:util";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const STATE_FILE = path.join(__dirname, "..", "state.json");
-const ENV_FILE = path.join(__dirname, "..", ".env");
+// import.meta.dirname resolves to dist/ at runtime; the .env / state files live
+// alongside the project root, one level up.
+const STATE_FILE = path.join(import.meta.dirname, "..", "state.json");
+const ENV_FILE = path.join(import.meta.dirname, "..", ".env");
+
+/** How long to wait on any single API request before giving up. */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,30 +57,6 @@ interface GitHubIssue {
 }
 
 // ---------------------------------------------------------------------------
-// Minimal .env loader (so there are no npm dependencies)
-// ---------------------------------------------------------------------------
-async function loadEnv(): Promise<void> {
-  if (!existsSync(ENV_FILE)) return;
-  const raw = await readFile(ENV_FILE, "utf8");
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    let value = trimmed.slice(eq + 1).trim();
-    // Strip surrounding quotes if present
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1);
-    }
-    if (!(key in process.env)) process.env[key] = value;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 function getConfig(): Config {
@@ -90,7 +69,7 @@ function getConfig(): Config {
     return v;
   };
 
-  const repos = (process.env.GITHUB_REPOS || "")
+  const repos = (process.env.GITHUB_REPOS ?? "")
     .split(",")
     .map((r) => r.trim())
     .filter(Boolean);
@@ -110,7 +89,7 @@ function getConfig(): Config {
     pollIntervalMinutes: Number(process.env.POLL_INTERVAL_MINUTES || 5),
     // On the very first run, don't create tasks for issues that already exist —
     // just record them as "seen". Set BACKFILL_EXISTING=true to import them.
-    backfillExisting: /^true$/i.test(process.env.BACKFILL_EXISTING || ""),
+    backfillExisting: /^true$/i.test(process.env.BACKFILL_EXISTING ?? ""),
   };
 }
 
@@ -118,10 +97,10 @@ function getConfig(): Config {
 // State (which issues we've already turned into tasks)
 // ---------------------------------------------------------------------------
 async function loadState(): Promise<State> {
-  if (!existsSync(STATE_FILE)) return { repos: {} };
   try {
     return JSON.parse(await readFile(STATE_FILE, "utf8")) as State;
   } catch {
+    // Missing or malformed file — start from an empty baseline.
     return { repos: {} };
   }
 }
@@ -154,6 +133,7 @@ async function fetchOpenIssues(repo: string, token: string): Promise<GitHubIssue
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "workflowy-github-sync",
       },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -201,6 +181,7 @@ async function createWorkflowyTask(
       Authorization: `Bearer ${cfg.workflowyApiKey}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (!res.ok) {
@@ -214,7 +195,7 @@ async function createWorkflowyTask(
 // Core sync for a single repo
 // ---------------------------------------------------------------------------
 async function syncRepo(repo: string, cfg: Config, state: State): Promise<number> {
-  const repoState: RepoState = state.repos[repo] || { initialized: false, seen: [] };
+  const repoState: RepoState = state.repos[repo] ?? { initialized: false, seen: [] };
   const seen = new Set(repoState.seen);
 
   const issues = await fetchOpenIssues(repo, cfg.githubToken);
@@ -279,13 +260,23 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Load .env (if present) using Node's built-in parser; real env vars win. */
+function loadEnv(): void {
+  try {
+    process.loadEnvFile(ENV_FILE);
+  } catch {
+    // No .env file — rely on the real environment.
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
-  await loadEnv();
+  loadEnv();
   const cfg = getConfig();
-  const once = process.argv.includes("--once");
+  const { values } = parseArgs({ options: { once: { type: "boolean", default: false } } });
+  const once = values.once;
 
   console.log(`workflowy-github-sync`);
   console.log(`  Repos:     ${cfg.repos.join(", ")}`);

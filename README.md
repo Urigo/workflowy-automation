@@ -10,13 +10,17 @@ or any always-on machine.
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) 18 or newer (`node --version` to check)
+- [Node.js](https://nodejs.org) 24 or newer (`node --version` to check).
+  A [`.nvmrc`](.nvmrc) is included, so `nvm use` / `fnm use` picks the right
+  version automatically.
 - A GitHub token with read access to the repos you want to watch
 - A Workflowy API key
 
 The app has **no runtime dependencies**. It's written in TypeScript and compiled
-to plain JavaScript that runs on Node's built-in `fetch`; TypeScript is only
-needed at build time (`npm install` pulls it in as a dev dependency).
+to plain JavaScript that runs entirely on modern Node built-ins — `fetch`,
+native `.env` loading (`process.loadEnvFile`), `import.meta.dirname`, and
+`util.parseArgs`. TypeScript is only needed at build time (`npm install` pulls
+it in as a dev dependency).
 
 ## Setup (5 minutes)
 
