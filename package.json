@@ -1,0 +1,27 @@
+{
+  "name": "workflowy-github-sync",
+  "version": "1.0.0",
+  "description": "Create a Workflowy task automatically whenever a GitHub issue is opened.",
+  "type": "module",
+  "bin": {
+    "workflowy-github-sync": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "npm run build && node dist/index.js",
+    "once": "npm run build && node dist/index.js --once",
+    "dev": "tsc --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  },
+  "license": "MIT"
+}
