@@ -29,17 +29,18 @@ async function createNode(node: NewNode): Promise<string> {
   return item_id;
 }
 
-/** Creates the task bullet for an issue; returns the created task's node id. */
+/** Creates the task bullet for an issue or PR; returns the created task's node id. */
 export async function createWorkflowyTask(
   issue: GitHubIssue,
   repo: string,
   parentId: string,
+  isPull: boolean,
 ): Promise<string> {
   const taskId = await createNode({
     parent_id: parentId,
-    name: `${issue.title}  ·  ${repo}#${issue.number}`,
+    name: `${isPull ? "🔀 " : ""}${issue.title}  ·  ${repo}#${issue.number}`,
     note: [
-      `${repo}#${issue.number} opened by @${issue.user?.login ?? "unknown"}`,
+      `${repo}#${issue.number} ${isPull ? "PR " : ""}opened by @${issue.user?.login ?? "unknown"}`,
       issue.html_url,
     ].join("\n"),
     layoutMode: env.WORKFLOWY_LAYOUT_MODE,

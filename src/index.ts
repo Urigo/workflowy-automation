@@ -29,14 +29,26 @@ const cli = meow(
 console.log(`workflowy-github-sync`);
 for (const cfg of repoConfigs) {
   const search = cfg.searchRootId === undefined ? "" : `, search: "${cfg.searchRootId}"`;
-  console.log(`  ${cfg.repo} → "${cfg.parentId}"${search}`);
+  const prs = cfg.trackPullRequests ? "" : ", PRs: off";
+  console.log(`  ${cfg.repo} → "${cfg.parentId}"${search}${prs}`);
 }
 console.log(`  Mode: ${cli.flags.once ? "run once" : `poll every ${env.POLL_INTERVAL_MINUTES} min`} (${env.WORKFLOWY_LAYOUT_MODE})\n`);
 
 await runOnce();
 if (!cli.flags.once) {
-  setInterval(
-    () => runOnce().catch((err) => console.error(`Poll error: ${errorMessage(err)}`)),
-    env.POLL_INTERVAL_MINUTES * 60 * 1000,
-  );
+  // A slow poll (many repos, rate-limited) must never overlap the next tick —
+  // overlapping runs would race on state.json.
+  let polling = false;
+  setInterval(() => {
+    if (polling) {
+      console.warn("⏭️  Previous poll still running — skipping this tick.");
+      return;
+    }
+    polling = true;
+    runOnce()
+      .catch((err) => console.error(`Poll error: ${errorMessage(err)}`))
+      .finally(() => {
+        polling = false;
+      });
+  }, env.POLL_INTERVAL_MINUTES * 60 * 1000);
 }

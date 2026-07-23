@@ -4,8 +4,9 @@ import { env, repoConfigs, type RepoConfig } from "./config.ts";
 import {
   fetchIssue,
   fetchIssueComments,
-  fetchOpenIssues,
+  fetchOpenItems,
   fetchRepoComments,
+  isBot,
   issueNumberFromUrl,
   type GitHubIssue,
 } from "./github.ts";
@@ -21,16 +22,24 @@ import {
 
 interface SyncCounts {
   tasks: number;
+  prTasks: number;
   linked: number;
   comments: number;
   completed: number;
   reopened: number;
 }
 
-const zeroCounts = (): SyncCounts => ({ tasks: 0, linked: 0, comments: 0, completed: 0, reopened: 0 });
+const zeroCounts = (): SyncCounts => ({ tasks: 0, prTasks: 0, linked: 0, comments: 0, completed: 0, reopened: 0 });
+
+/** One open item (issue or PR) plus which kind it is. */
+interface TrackedItem {
+  item: GitHubIssue;
+  isPull: boolean;
+}
 
 function addCounts(target: SyncCounts, add: SyncCounts): void {
   target.tasks += add.tasks;
+  target.prTasks += add.prTasks;
   target.linked += add.linked;
   target.comments += add.comments;
   target.completed += add.completed;
@@ -46,29 +55,36 @@ async function recordIssue(repoState: RepoState, issueNumber: number, taskId: st
 }
 
 /**
- * Ensures an issue has a Workflowy task. If a bullet for it already exists
+ * Ensures an issue/PR has a Workflowy task. If a bullet for it already exists
  * anywhere under the configured search root, that bullet is linked instead of
- * creating a duplicate. Newly created tasks import every comment the issue
+ * creating a duplicate. Newly created tasks import every comment the item
  * already has. Returns the sync counts.
  */
-async function trackIssue(cfg: RepoConfig, repoState: RepoState, issue: GitHubIssue): Promise<SyncCounts> {
+async function trackItem(
+  cfg: RepoConfig,
+  repoState: RepoState,
+  tracked: TrackedItem,
+): Promise<SyncCounts> {
   const counts = zeroCounts();
   const repo = cfg.repo;
+  const { item: issue, isPull } = tracked;
+  const kind = isPull ? "PR" : "issue";
 
   if (cfg.searchRootId !== undefined) {
     const existingId = await findIssueBullet(cfg.searchRootId, repo, issue.number);
     if (existingId !== undefined) {
       await recordIssue(repoState, issue.number, existingId);
       counts.linked += 1;
-      console.log(`🔗 ${repo}#${issue.number} already in Workflowy → linked to existing bullet.`);
+      console.log(`🔗 ${repo}#${issue.number} (${kind}) already in Workflowy → linked to existing bullet.`);
       return counts;
     }
   }
 
-  const taskId = await createWorkflowyTask(issue, repo, cfg.parentId);
+  const taskId = await createWorkflowyTask(issue, repo, cfg.parentId, isPull);
   await recordIssue(repoState, issue.number, taskId);
-  counts.tasks += 1;
-  console.log(`✅ ${repo}#${issue.number} → Workflowy task created: "${issue.title}"`);
+  if (isPull) counts.prTasks += 1;
+  else counts.tasks += 1;
+  console.log(`${isPull ? "🔀" : "✅"} ${repo}#${issue.number} → Workflowy ${kind} task created: "${issue.title}"`);
 
   if (issue.comments === 0) return counts;
 
@@ -90,23 +106,24 @@ async function trackIssue(cfg: RepoConfig, repoState: RepoState, issue: GitHubIs
   return counts;
 }
 
-/** Creates tasks (and imports comments) for issues we haven't seen before. */
-async function syncNewIssues(
+/** Creates tasks (and imports comments) for issues/PRs we haven't seen before. */
+async function syncNewItems(
   cfg: RepoConfig,
   repoState: RepoState,
-  issues: GitHubIssue[],
+  items: GitHubIssue[],
+  isPull: boolean,
 ): Promise<SyncCounts> {
   const seen = new Set(repoState.seen);
   // Process oldest first so tasks appear in chronological order.
-  const fresh = issues.filter((i) => !seen.has(i.number)).reverse();
+  const fresh = items.filter((i) => !seen.has(i.number)).reverse();
 
   const counts = zeroCounts();
-  for (const issue of fresh) {
+  for (const item of fresh) {
     try {
-      addCounts(counts, await trackIssue(cfg, repoState, issue));
+      addCounts(counts, await trackItem(cfg, repoState, { item, isPull }));
     } catch (err) {
       // Leave it unseen so we retry on the next poll.
-      console.error(`❌ Failed to create task for ${cfg.repo}#${issue.number}: ${errorMessage(err)}`);
+      console.error(`❌ Failed to create task for ${cfg.repo}#${item.number}: ${errorMessage(err)}`);
     }
   }
   return counts;
@@ -121,7 +138,7 @@ async function syncNewIssues(
 async function syncComments(
   cfg: RepoConfig,
   repoState: RepoState,
-  issuesByNumber: Map<number, GitHubIssue>,
+  itemsByNumber: Map<number, TrackedItem>,
 ): Promise<SyncCounts> {
   const since = repoState.commentsSince;
   if (!since) {
@@ -137,11 +154,11 @@ async function syncComments(
 
   for (const comment of await fetchRepoComments(cfg.repo, since)) {
     const issueNumber = issueNumberFromUrl(comment.issue_url);
-    const issue = issueNumber === undefined ? undefined : issuesByNumber.get(issueNumber);
+    const tracked = issueNumber === undefined ? undefined : itemsByNumber.get(issueNumber);
 
-    if (seenComments.includes(comment.id) || issueNumber === undefined || !issue) {
-      // Already handled, or a comment on a PR / closed issue: skip it, but
-      // remember the id so the skip stays cheap on future polls.
+    if (seenComments.includes(comment.id) || issueNumber === undefined || !tracked) {
+      // Already handled, or a comment on an untracked item (closed issue,
+      // bot PR, …): skip it, but remember the id so the skip stays cheap.
       if (!seenComments.includes(comment.id)) seenComments.push(comment.id);
       if (comment.updated_at > watermark) watermark = comment.updated_at;
       continue;
@@ -150,9 +167,9 @@ async function syncComments(
     try {
       const taskId = repoState.taskIds?.[issueNumber];
       if (taskId === undefined) {
-        // Comment activity on an issue with no Workflowy task (e.g. part of
+        // Comment activity on an item with no Workflowy task (e.g. part of
         // the initial baseline): create/link the task and import all comments.
-        addCounts(counts, await trackIssue(cfg, repoState, issue));
+        addCounts(counts, await trackItem(cfg, repoState, tracked));
       } else {
         await createCommentBullet(taskId, comment);
         seenComments.push(comment.id);
@@ -184,14 +201,14 @@ async function syncComments(
 async function syncClosedIssues(
   cfg: RepoConfig,
   repoState: RepoState,
-  issuesByNumber: Map<number, GitHubIssue>,
+  itemsByNumber: Map<number, TrackedItem>,
 ): Promise<SyncCounts> {
   const counts = zeroCounts();
   const completed = (repoState.completedIssues ??= []);
 
   for (const [key, taskId] of Object.entries(repoState.taskIds ?? {})) {
     const issueNumber = Number(key);
-    const isOpen = issuesByNumber.has(issueNumber);
+    const isOpen = itemsByNumber.has(issueNumber);
     const isCompleted = completed.includes(issueNumber);
 
     try {
@@ -224,24 +241,45 @@ async function syncClosedIssues(
 async function syncRepo(cfg: RepoConfig): Promise<SyncCounts> {
   const repoState = (db.data.repos[cfg.repo] ??= { initialized: false, seen: [] });
 
-  const issues = await fetchOpenIssues(cfg.repo);
-  const issuesByNumber = new Map(issues.map((i) => [i.number, i]));
+  const { issues, pulls: allPulls } = await fetchOpenItems(cfg.repo);
+  // Bot PRs (dependabot, renovate, …) never become tasks.
+  const pulls = cfg.trackPullRequests ? allPulls.filter((p) => !isBot(p.user)) : [];
+
+  const itemsByNumber = new Map<number, TrackedItem>();
+  for (const item of issues) itemsByNumber.set(item.number, { item, isPull: false });
+  for (const item of pulls) itemsByNumber.set(item.number, { item, isPull: true });
 
   if (!repoState.initialized && !env.BACKFILL_EXISTING) {
-    // First time we see this repo: record existing issues as a baseline
-    // instead of flooding Workflowy with every open issue.
+    // First time we see this repo: record existing items as a baseline
+    // instead of flooding Workflowy with every open issue/PR.
     repoState.initialized = true;
-    repoState.seen = issues.map((i) => i.number);
+    repoState.prInitialized = true;
+    repoState.seen = [...itemsByNumber.keys()];
     repoState.commentsSince = new Date().toISOString();
     await db.write();
-    console.log(`📌 ${cfg.repo}: baseline set (${issues.length} existing open issue(s) marked as seen).`);
+    console.log(
+      `📌 ${cfg.repo}: baseline set (${issues.length} open issue(s), ${pulls.length} open PR(s) marked as seen).`,
+    );
     return zeroCounts();
   }
 
+  // Repo predates PR tracking: baseline its existing open PRs once, so only
+  // PRs opened from now on become tasks.
+  if (cfg.trackPullRequests && !repoState.prInitialized) {
+    repoState.prInitialized = true;
+    if (!env.BACKFILL_EXISTING) {
+      const baselined = pulls.filter((p) => !repoState.seen.includes(p.number));
+      for (const p of baselined) repoState.seen.push(p.number);
+      console.log(`📌 ${cfg.repo}: PR baseline set (${baselined.length} existing open PR(s) marked as seen).`);
+    }
+    await db.write();
+  }
+
   const counts = zeroCounts();
-  addCounts(counts, await syncNewIssues(cfg, repoState, issues));
-  addCounts(counts, await syncComments(cfg, repoState, issuesByNumber));
-  addCounts(counts, await syncClosedIssues(cfg, repoState, issuesByNumber));
+  addCounts(counts, await syncNewItems(cfg, repoState, issues, false));
+  addCounts(counts, await syncNewItems(cfg, repoState, pulls, true));
+  addCounts(counts, await syncComments(cfg, repoState, itemsByNumber));
+  addCounts(counts, await syncClosedIssues(cfg, repoState, itemsByNumber));
   return counts;
 }
 
@@ -258,6 +296,7 @@ export async function runOnce(): Promise<void> {
   const stamp = new Date().toISOString();
   const parts = [
     ...(total.tasks > 0 ? [`${total.tasks} new task(s)`] : []),
+    ...(total.prTasks > 0 ? [`${total.prTasks} new PR task(s)`] : []),
     ...(total.linked > 0 ? [`${total.linked} linked to existing bullet(s)`] : []),
     ...(total.comments > 0 ? [`${total.comments} comment(s)`] : []),
     ...(total.completed > 0 ? [`${total.completed} completed`] : []),

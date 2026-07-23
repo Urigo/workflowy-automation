@@ -5,8 +5,8 @@ import { env } from "./config.ts";
 
 const octokit = new Octokit({ auth: env.GITHUB_TOKEN });
 
-/** Exact issue type from octokit's response — no hand-written approximation. */
-export type GitHubIssue = Awaited<ReturnType<typeof fetchOpenIssues>>[number];
+/** Exact issue/PR item type from octokit's response — no hand-written approximation. */
+export type GitHubIssue = Awaited<ReturnType<typeof fetchOpenItems>>["issues"][number];
 
 /** Exact comment type from octokit's response. */
 export type IssueComment = Awaited<ReturnType<typeof fetchIssueComments>>[number];
@@ -20,17 +20,28 @@ function parseRepo(repo: string): { owner: string; name: string } | undefined {
   return { owner, name };
 }
 
-export async function fetchOpenIssues(repo: string) {
+/**
+ * All open issues AND pull requests of a repo, in one paginated fetch —
+ * the issues endpoint returns both, distinguished by the pull_request marker.
+ */
+export async function fetchOpenItems(repo: string) {
   const parsed = parseRepo(repo);
-  if (!parsed) return [];
-  const issues = await octokit.paginate(octokit.rest.issues.listForRepo, {
+  if (!parsed) return { issues: [], pulls: [] };
+  const items = await octokit.paginate(octokit.rest.issues.listForRepo, {
     owner: parsed.owner,
     repo: parsed.name,
     state: "open",
     per_page: 100,
   });
-  // The issues endpoint also returns pull requests; filter them out.
-  return issues.filter((i) => !i.pull_request);
+  return {
+    issues: items.filter((i) => !i.pull_request),
+    pulls: items.filter((i) => i.pull_request),
+  };
+}
+
+/** True for GitHub bot accounts (dependabot, renovate, github-actions, …). */
+export function isBot(user: GitHubIssue["user"]): boolean {
+  return user?.type === "Bot" || (user?.login.endsWith("[bot]") ?? false);
 }
 
 /** All comments of a single issue, oldest first. */

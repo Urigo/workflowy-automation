@@ -1,11 +1,12 @@
 {
   "defaults": {
     "parentId": "inbox",
-    "searchRootId": "node-id-whose-whole-subtree-is-checked-for-existing-issues"
+    "searchRootId": "node-id-whose-whole-subtree-is-checked-for-existing-issues",
+    "pullRequests": true
   },
   "repos": [
     { "repo": "my-org/api", "parentId": "node-id-for-api-issues" },
     { "repo": "my-org/web", "parentId": "node-id-for-web-issues", "searchRootId": "override-per-repo" },
-    { "repo": "my-org/docs" }
+    { "repo": "my-org/docs", "pullRequests": false }
   ]
 }

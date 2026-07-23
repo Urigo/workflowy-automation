@@ -4,12 +4,14 @@ Automatically create a Workflowy task whenever someone opens an issue on one of
 your GitHub repositories — and keep it updated as the conversation continues:
 
 - **New issue** → a task bullet, with the issue description as a sub-bullet.
-- **New comment** on a tracked issue → a `💬` sub-bullet under its task.
-- **New comment on an issue that isn't in Workflowy yet** (e.g. one that
-  predates the sync) → the issue's task is created retroactively, with all of
-  its existing comments brought along.
-- **Issue closed** → its task is marked complete; **reopened** → the task is
-  brought back.
+- **New pull request** → the same, marked with a `🔀` prefix. PRs opened by
+  bots (dependabot, renovate, …) are always skipped.
+- **New comment** on a tracked issue/PR → a `💬` sub-bullet under its task.
+- **New comment on an issue/PR that isn't in Workflowy yet** (e.g. one that
+  predates the sync) → its task is created retroactively, with all of its
+  existing comments brought along.
+- **Issue/PR closed or merged** → its task is marked complete; **reopened** →
+  the task is brought back.
 
 It works by **polling**: every few minutes the app asks GitHub for new issues
 and creates a matching task in Workflowy via the official Workflowy API. No
@@ -82,6 +84,9 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
      that bullet is linked as the issue's task — comments and completion sync
      to it — instead of creating a duplicate. Useful when you move issue
      bullets out of the drop-off parent into project areas.
+   - **`pullRequests`** *(optional, default `true`)* — set to `false` (per
+     repo or in `defaults`) to skip PR tracking for that repo. Bot-authored
+     PRs are always skipped regardless.
    - Without a `config.json`, the legacy `.env` settings (`GITHUB_REPOS`,
      `WORKFLOWY_PARENT_ID`) are used instead.
 

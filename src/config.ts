@@ -34,6 +34,8 @@ export interface RepoConfig {
    * subtree is searched — a match links the task instead of creating one.
    */
   searchRootId?: string;
+  /** Whether new pull requests also become tasks (bot PRs are always skipped). */
+  trackPullRequests: boolean;
 }
 
 const configFileSchema = z.object({
@@ -41,6 +43,7 @@ const configFileSchema = z.object({
     .object({
       parentId: z.string().min(1).optional(),
       searchRootId: z.string().min(1).optional(),
+      pullRequests: z.boolean().optional(),
     })
     .optional(),
   repos: z
@@ -49,6 +52,7 @@ const configFileSchema = z.object({
         repo: z.string().regex(/^[^/\s]+\/[^/\s]+$/, 'expected "owner/name"'),
         parentId: z.string().min(1).optional(),
         searchRootId: z.string().min(1).optional(),
+        pullRequests: z.boolean().optional(),
       }),
     )
     .min(1),
@@ -88,6 +92,7 @@ function loadRepoConfigs(): RepoConfig[] {
       return {
         repo: r.repo,
         parentId: r.parentId ?? defaults?.parentId ?? env.WORKFLOWY_PARENT_ID,
+        trackPullRequests: r.pullRequests ?? defaults?.pullRequests ?? true,
         ...(searchRootId === undefined ? {} : { searchRootId }),
       };
     });
@@ -98,7 +103,7 @@ function loadRepoConfigs(): RepoConfig[] {
   if (repos.length === 0) {
     fail("No repositories configured. Create a config.json (see config.example.json).");
   }
-  return repos.map((repo) => ({ repo, parentId: env.WORKFLOWY_PARENT_ID }));
+  return repos.map((repo) => ({ repo, parentId: env.WORKFLOWY_PARENT_ID, trackPullRequests: true }));
 }
 
 export const repoConfigs = loadRepoConfigs();

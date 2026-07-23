@@ -6,7 +6,9 @@ import { ROOT } from "./config.ts";
 
 export interface RepoState {
   initialized: boolean;
-  /** Issue numbers already handled (baselined or turned into tasks). */
+  /** Set once existing open PRs have been baselined for this repo. */
+  prInitialized?: boolean;
+  /** Issue/PR numbers already handled (baselined or turned into tasks). */
   seen: number[];
   /** Issue number → Workflowy node id of that issue's task bullet. */
   taskIds?: Record<string, string>;
