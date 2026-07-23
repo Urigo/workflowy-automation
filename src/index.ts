@@ -10,7 +10,7 @@
  */
 
 import meow from "meow";
-import { env, repos } from "./config.ts";
+import { env, repoConfigs } from "./config.ts";
 import { runOnce } from "./sync.ts";
 import { errorMessage } from "./util.ts";
 
@@ -27,9 +27,11 @@ const cli = meow(
 );
 
 console.log(`workflowy-github-sync`);
-console.log(`  Repos:     ${repos.join(", ")}`);
-console.log(`  Workflowy: new tasks → "${env.WORKFLOWY_PARENT_ID}" (${env.WORKFLOWY_LAYOUT_MODE})`);
-console.log(`  Mode:      ${cli.flags.once ? "run once" : `poll every ${env.POLL_INTERVAL_MINUTES} min`}\n`);
+for (const cfg of repoConfigs) {
+  const search = cfg.searchRootId === undefined ? "" : `, search: "${cfg.searchRootId}"`;
+  console.log(`  ${cfg.repo} → "${cfg.parentId}"${search}`);
+}
+console.log(`  Mode: ${cli.flags.once ? "run once" : `poll every ${env.POLL_INTERVAL_MINUTES} min`} (${env.WORKFLOWY_LAYOUT_MODE})\n`);
 
 await runOnce();
 if (!cli.flags.once) {

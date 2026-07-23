@@ -1,4 +1,4 @@
-/** Workflowy client: creates a task (plus description sub-bullet) for a GitHub issue. */
+/** Workflowy client: creates/updates the bullets that mirror GitHub issues. */
 
 import ky from "ky";
 import { env } from "./config.ts";
@@ -30,9 +30,13 @@ async function createNode(node: NewNode): Promise<string> {
 }
 
 /** Creates the task bullet for an issue; returns the created task's node id. */
-export async function createWorkflowyTask(issue: GitHubIssue, repo: string): Promise<string> {
+export async function createWorkflowyTask(
+  issue: GitHubIssue,
+  repo: string,
+  parentId: string,
+): Promise<string> {
   const taskId = await createNode({
-    parent_id: env.WORKFLOWY_PARENT_ID,
+    parent_id: parentId,
     name: `${issue.title}  ·  ${repo}#${issue.number}`,
     note: [
       `${repo}#${issue.number} opened by @${issue.user?.login ?? "unknown"}`,
@@ -72,4 +76,62 @@ export async function createCommentBullet(taskId: string, comment: IssueComment)
     note: [comment.body?.trim(), comment.html_url].filter(Boolean).join("\n\n"),
     position: "bottom",
   });
+}
+
+// ---------------------------------------------------------------------------
+// Existence search: is an issue already somewhere under a configured bullet?
+// ---------------------------------------------------------------------------
+interface SubtreeNode {
+  id: string;
+  name: string | null;
+  note: string | null;
+}
+
+/** Subtrees already walked this poll, keyed by root node id. */
+const subtreeCache = new Map<string, SubtreeNode[]>();
+
+/** Drop cached subtrees so the next poll sees fresh data. */
+export function clearWorkflowyCache(): void {
+  subtreeCache.clear();
+}
+
+async function fetchChildren(parentId: string): Promise<SubtreeNode[]> {
+  const { nodes } = await workflowy
+    .get("nodes", { searchParams: { parent_id: parentId } })
+    .json<{ nodes: SubtreeNode[] }>();
+  return nodes;
+}
+
+/** Every descendant of rootId (breadth-first), cached per poll. */
+async function loadSubtree(rootId: string): Promise<SubtreeNode[]> {
+  const cached = subtreeCache.get(rootId);
+  if (cached) return cached;
+
+  const all: SubtreeNode[] = [];
+  const queue: string[] = [rootId];
+  for (let next = queue.pop(); next !== undefined; next = queue.pop()) {
+    const children = await fetchChildren(next);
+    all.push(...children);
+    queue.push(...children.map((c) => c.id));
+  }
+  subtreeCache.set(rootId, all);
+  return all;
+}
+
+/**
+ * Searches the whole subtree under rootId for a bullet referencing
+ * `repo#issueNumber` and returns its node id. Bullet names are preferred over
+ * notes, so an issue mentioning another issue in its imported description
+ * can't shadow the real task bullet.
+ */
+export async function findIssueBullet(
+  rootId: string,
+  repo: string,
+  issueNumber: number,
+): Promise<string | undefined> {
+  const pattern = new RegExp(`${RegExp.escape(repo)}#${issueNumber}(?!\\d)`);
+  const nodes = await loadSubtree(rootId);
+  const byName = nodes.find((n) => pattern.test(n.name ?? ""));
+  if (byName) return byName.id;
+  return nodes.find((n) => pattern.test(n.note ?? ""))?.id;
 }

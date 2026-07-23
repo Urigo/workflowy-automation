@@ -34,6 +34,7 @@ actual sync logic:
 | `octokit` | Official GitHub SDK — auth, pagination, retries        |
 | `ky`      | HTTP client for the Workflowy API — timeouts, retries  |
 | `envalid` | Validates `.env` config, with defaults and clear errors|
+| `zod`     | Validates `config.json`                                |
 | `lowdb`   | Persists `state.json`                                  |
 | `meow`    | CLI flags and `--help`                                 |
 | `dotenv`  | Loads `.env`                                           |
@@ -56,15 +57,33 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
    A *fine-grained* token with **Issues: Read-only** on your repos is enough.
    Paste it into `.env` as `GITHUB_TOKEN`.
 
-4. **List your repos** in `.env`, comma-separated:
+4. **Configure your repos** — copy [config.example.json](config.example.json)
+   to `config.json`:
 
-   ```
-   GITHUB_REPOS=my-org/api, my-org/web
+   ```json
+   {
+     "defaults": {
+       "parentId": "inbox",
+       "searchRootId": "some-node-id"
+     },
+     "repos": [
+       { "repo": "my-org/api", "parentId": "node-id-for-api-issues" },
+       { "repo": "my-org/web" }
+     ]
+   }
    ```
 
-5. (Optional) Choose where tasks land. By default they go to your Workflowy
-   **Inbox**. To use a specific bullet instead, set `WORKFLOWY_PARENT_ID` to
-   that bullet's node id.
+   - **`parentId`** — the Workflowy node new issue tasks are created under,
+     per repo (`"inbox"` = your Workflowy Inbox). A repo without its own
+     `parentId` uses `defaults.parentId`.
+   - **`searchRootId`** *(optional)* — a bullet to check before creating a
+     task. Its **entire subtree** (all descendant bullets, any depth) is
+     searched for an existing bullet referencing `owner/repo#123`; when found,
+     that bullet is linked as the issue's task — comments and completion sync
+     to it — instead of creating a duplicate. Useful when you move issue
+     bullets out of the drop-off parent into project areas.
+   - Without a `config.json`, the legacy `.env` settings (`GITHUB_REPOS`,
+     `WORKFLOWY_PARENT_ID`) are used instead.
 
 ## Run it
 
@@ -118,7 +137,7 @@ the GitHub comments query — it never decides what's new.)
 | File               | Purpose                                            |
 |--------------------|----------------------------------------------------|
 | `src/index.ts`     | Entrypoint — CLI flags, startup banner, poll loop  |
-| `src/config.ts`    | Loads `.env` and validates all settings            |
+| `src/config.ts`    | Loads and validates `.env` + `config.json`         |
 | `src/sync.ts`      | Core logic: diff issues against state, create tasks|
 | `src/github.ts`    | GitHub client — fetches a repo's open issues       |
 | `src/workflowy.ts` | Workflowy client — creates a task for an issue     |
@@ -128,4 +147,6 @@ the GitHub comments query — it never decides what's new.)
 | `.nvmrc`        | Pins the Node version for `nvm`/`fnm`              |
 | `.env`          | Your secrets & settings (never commit this)        |
 | `.env.example`  | Template to copy                                   |
+| `config.json`   | Your repos & Workflowy node mapping (not committed)|
+| `config.example.json` | Template to copy                             |
 | `state.json`    | Auto-created; tracks which issues are done         |
