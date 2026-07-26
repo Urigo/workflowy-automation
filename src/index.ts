@@ -10,9 +10,10 @@
  */
 
 import meow from "meow";
-import { env, repoConfigs } from "./config.ts";
+import { env, repoConfigs, slackChannelConfigs } from "./config.ts";
 import { runOnce } from "./sync.ts";
 import { errorMessage } from "./util.ts";
+import { nodeLabel, prefetchNodeNames } from "./workflowy.ts";
 
 const cli = meow(
   `
@@ -27,10 +28,22 @@ const cli = meow(
 );
 
 console.log(`workflowy-github-sync`);
+// Resolve the configured Workflowy node ids to names so the banner is readable.
+await prefetchNodeNames([
+  ...repoConfigs.flatMap((c) => [c.parentId, ...(c.searchRootId === undefined ? [] : [c.searchRootId])]),
+  ...slackChannelConfigs.map((c) => c.parentId),
+]);
 for (const cfg of repoConfigs) {
-  const search = cfg.searchRootId === undefined ? "" : `, search: "${cfg.searchRootId}"`;
+  const search = cfg.searchRootId === undefined ? "" : `, search: ${nodeLabel(cfg.searchRootId)}`;
   const prs = cfg.trackPullRequests ? "" : ", PRs: off";
-  console.log(`  ${cfg.repo} → "${cfg.parentId}"${search}${prs}`);
+  console.log(`  ${cfg.repo} → ${nodeLabel(cfg.parentId)}${search}${prs}`);
+}
+if (slackChannelConfigs.length > 10) {
+  console.log(`  Slack: ${slackChannelConfigs.length} channel(s) tracked (only those the bot is in are polled)`);
+} else {
+  for (const cfg of slackChannelConfigs) {
+    console.log(`  Slack ${cfg.channel} → ${nodeLabel(cfg.parentId)} (threads watched ${cfg.lookbackDays}d back)`);
+  }
 }
 console.log(`  Mode: ${cli.flags.once ? "run once" : `poll every ${env.POLL_INTERVAL_MINUTES} min`} (${env.WORKFLOWY_LAYOUT_MODE})\n`);
 

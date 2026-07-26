@@ -14,6 +14,7 @@ loadDotenv({ path: path.join(ROOT, ".env"), quiet: true });
 export const env = cleanEnv(process.env, {
   GITHUB_TOKEN: str({ desc: "GitHub token with read access to the repos" }),
   WORKFLOWY_API_KEY: str({ desc: "API key from https://workflowy.com/api-key" }),
+  SLACK_BOT_TOKEN: str({ default: "", desc: "Slack bot token (xoxb-…) — required when config.json lists slackChannels" }),
   // Legacy fallbacks, used only when there is no config.json.
   GITHUB_REPOS: str({ default: "", desc: 'Comma-separated repos (fallback when config.json is absent)' }),
   WORKFLOWY_PARENT_ID: str({ default: "inbox" }),
@@ -38,6 +39,20 @@ export interface RepoConfig {
   trackPullRequests: boolean;
 }
 
+/**
+ * Per-Slack-channel settings, resolved from config.json (with defaults
+ * applied). A config.json entry listing several comma-separated channel ids
+ * expands into one of these per channel.
+ */
+export interface SlackChannelConfig {
+  /** A single Slack channel id (C…), shown in the channel's "About" tab. */
+  channel: string;
+  /** Workflowy node that new message bullets are created under. */
+  parentId: string;
+  /** How many days back channel threads are watched for new replies. */
+  lookbackDays: number;
+}
+
 const configFileSchema = z.object({
   defaults: z
     .object({
@@ -56,6 +71,21 @@ const configFileSchema = z.object({
       }),
     )
     .min(1),
+  slackChannels: z
+    .array(
+      z.object({
+        channel: z
+          .string()
+          .regex(
+            /^[CGD][A-Z0-9]{5,}(\s*,\s*[CGD][A-Z0-9]{5,})*$/,
+            'expected Slack channel id(s) like "C0123ABCDE" or "C0123ABCDE, C0456FGHIJ"',
+          ),
+        parentId: z.string().min(1).optional(),
+        lookbackDays: z.number().int().positive().optional(),
+        track: z.boolean().optional(),
+      }),
+    )
+    .optional(),
 });
 
 function fail(message: string): never {
@@ -63,7 +93,42 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-function loadRepoConfigs(): RepoConfig[] {
+/** Strips `//` line comments (outside strings) so config.json can be annotated. */
+function stripJsonComments(text: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (ch === "\\") {
+        out += text[++i] ?? "";
+        continue;
+      }
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      i--; // let the loop handle the newline, keeping line numbers stable
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+interface LoadedConfigs {
+  repos: RepoConfig[];
+  slackChannels: SlackChannelConfig[];
+}
+
+function loadConfigs(): LoadedConfigs {
   const file = path.join(ROOT, "config.json");
   let raw: string | undefined;
   try {
@@ -75,7 +140,7 @@ function loadRepoConfigs(): RepoConfig[] {
   if (raw !== undefined) {
     let json: unknown;
     try {
-      json = JSON.parse(raw);
+      json = JSON.parse(stripJsonComments(raw));
     } catch (err) {
       fail(`config.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -86,16 +151,37 @@ function loadRepoConfigs(): RepoConfig[] {
           parsed.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n"),
       );
     }
-    const { defaults, repos } = parsed.data;
-    return repos.map((r) => {
-      const searchRootId = r.searchRootId ?? defaults?.searchRootId;
-      return {
-        repo: r.repo,
-        parentId: r.parentId ?? defaults?.parentId ?? env.WORKFLOWY_PARENT_ID,
-        trackPullRequests: r.pullRequests ?? defaults?.pullRequests ?? true,
-        ...(searchRootId === undefined ? {} : { searchRootId }),
-      };
-    });
+    const { defaults, repos, slackChannels } = parsed.data;
+    // "channel" may hold several comma-separated ids — one config per id.
+    // track:false keeps a channel listed in config.json without syncing it.
+    const channels = (slackChannels ?? [])
+      .filter((c) => c.track !== false)
+      .flatMap((c) =>
+        c.channel.split(",").map((id) => ({
+          channel: id.trim(),
+          parentId: c.parentId ?? defaults?.parentId ?? env.WORKFLOWY_PARENT_ID,
+          lookbackDays: c.lookbackDays ?? 300,
+        })),
+      );
+    if (channels.length > 0 && env.SLACK_BOT_TOKEN === "") {
+      // Don't kill the GitHub sync over a missing Slack token — just skip Slack.
+      console.warn(
+        `⚠️  config.json lists ${channels.length} Slack channel(s) but SLACK_BOT_TOKEN is not set in .env — Slack sync is disabled.`,
+      );
+      channels.length = 0;
+    }
+    return {
+      repos: repos.map((r) => {
+        const searchRootId = r.searchRootId ?? defaults?.searchRootId;
+        return {
+          repo: r.repo,
+          parentId: r.parentId ?? defaults?.parentId ?? env.WORKFLOWY_PARENT_ID,
+          trackPullRequests: r.pullRequests ?? defaults?.pullRequests ?? true,
+          ...(searchRootId === undefined ? {} : { searchRootId }),
+        };
+      }),
+      slackChannels: channels,
+    };
   }
 
   // Legacy .env configuration: same parent for every repo, no search root.
@@ -103,7 +189,12 @@ function loadRepoConfigs(): RepoConfig[] {
   if (repos.length === 0) {
     fail("No repositories configured. Create a config.json (see config.example.json).");
   }
-  return repos.map((repo) => ({ repo, parentId: env.WORKFLOWY_PARENT_ID, trackPullRequests: true }));
+  return {
+    repos: repos.map((repo) => ({ repo, parentId: env.WORKFLOWY_PARENT_ID, trackPullRequests: true })),
+    slackChannels: [],
+  };
 }
 
-export const repoConfigs = loadRepoConfigs();
+const configs = loadConfigs();
+export const repoConfigs = configs.repos;
+export const slackChannelConfigs = configs.slackChannels;

@@ -1,6 +1,6 @@
 /** Core sync logic: diff issues/comments against seen-state, create bullets, persist. */
 
-import { env, repoConfigs, type RepoConfig } from "./config.ts";
+import { env, repoConfigs, slackChannelConfigs, type RepoConfig } from "./config.ts";
 import {
   fetchIssue,
   fetchIssueComments,
@@ -10,6 +10,7 @@ import {
   issueNumberFromUrl,
   type GitHubIssue,
 } from "./github.ts";
+import { syncSlackChannels } from "./slack-sync.ts";
 import { db, type RepoState } from "./state.ts";
 import { errorMessage } from "./util.ts";
 import {
@@ -293,6 +294,8 @@ export async function runOnce(): Promise<void> {
       console.error(`❌ Error syncing ${cfg.repo}: ${errorMessage(err)}`);
     }
   }
+  const slackTotal = await syncSlackChannels();
+
   const stamp = new Date().toISOString();
   const parts = [
     ...(total.tasks > 0 ? [`${total.tasks} new task(s)`] : []),
@@ -301,7 +304,10 @@ export async function runOnce(): Promise<void> {
     ...(total.comments > 0 ? [`${total.comments} comment(s)`] : []),
     ...(total.completed > 0 ? [`${total.completed} completed`] : []),
     ...(total.reopened > 0 ? [`${total.reopened} reopened`] : []),
+    ...(slackTotal.messages > 0 ? [`${slackTotal.messages} Slack message(s)`] : []),
+    ...(slackTotal.replies > 0 ? [`${slackTotal.replies} Slack repl(y/ies)`] : []),
   ];
+  const slackSuffix = slackChannelConfigs.length > 0 ? ` and ${slackChannelConfigs.length} Slack channel(s)` : "";
   if (parts.length > 0) console.log(`[${stamp}] Done — ${parts.join(", ")}.`);
-  else console.log(`[${stamp}] Checked ${repoConfigs.length} repo(s) — nothing new.`);
+  else console.log(`[${stamp}] Checked ${repoConfigs.length} repo(s)${slackSuffix} — nothing new.`);
 }

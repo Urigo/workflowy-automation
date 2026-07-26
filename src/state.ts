@@ -23,7 +23,29 @@ export interface RepoState {
   commentsSince?: string;
 }
 
-export const db = await JSONFilePreset<{ repos: Record<string, RepoState> }>(
+export interface ChannelState {
+  initialized: boolean;
+  /** Message ts values already handled (baselined or turned into bullets). */
+  seen: string[];
+  /** Message ts → Workflowy node id of that message's bullet. */
+  taskIds?: Record<string, string>;
+  /** Thread reply ts values already processed. */
+  seenReplies?: string[];
+  /**
+   * Fetch optimization only — a thread is re-fetched when the channel history
+   * shows a latest_reply newer than this. Whether a reply is new is always
+   * decided by ts via seenReplies.
+   */
+  lastReplyTs?: Record<string, string>;
+}
+
+interface StateFile {
+  repos: Record<string, RepoState>;
+  /** Keyed by Slack channel id. Absent in pre-Slack state files. */
+  slackChannels?: Record<string, ChannelState>;
+}
+
+export const db = await JSONFilePreset<StateFile>(
   path.join(ROOT, "state.json"),
-  { repos: {} },
+  { repos: {}, slackChannels: {} },
 );
