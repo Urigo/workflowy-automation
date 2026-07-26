@@ -18,6 +18,8 @@ export const env = cleanEnv(process.env, {
   // Joining posts a "joined the channel" system message visible to everyone
   // in the channel — enable deliberately. Needs the channels:join bot scope.
   SLACK_AUTO_JOIN: bool({ default: false, desc: "Auto-join public tracked channels the bot isn't in yet" }),
+  // Lets config.json live outside this repo (e.g. in a private sibling repo).
+  CONFIG_PATH: str({ default: "", desc: "Path to config.json, absolute or relative to the project root (default: ./config.json)" }),
   // Legacy fallbacks, used only when there is no config.json.
   GITHUB_REPOS: str({ default: "", desc: 'Comma-separated repos (fallback when config.json is absent)' }),
   WORKFLOWY_PARENT_ID: str({ default: "inbox" }),
@@ -132,11 +134,16 @@ interface LoadedConfigs {
 }
 
 function loadConfigs(): LoadedConfigs {
-  const file = path.join(ROOT, "config.json");
+  const file = env.CONFIG_PATH === "" ? path.join(ROOT, "config.json") : path.resolve(ROOT, env.CONFIG_PATH);
   let raw: string | undefined;
   try {
     raw = readFileSync(file, "utf8");
-  } catch {
+  } catch (err) {
+    // An explicit CONFIG_PATH that can't be read is a setup error — fail loudly
+    // instead of silently falling back to the legacy .env configuration.
+    if (env.CONFIG_PATH !== "") {
+      fail(`CONFIG_PATH is set but the file can't be read (${file}): ${err instanceof Error ? err.message : String(err)}`);
+    }
     raw = undefined; // no config.json — fall back to .env below
   }
 

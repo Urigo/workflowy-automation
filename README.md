@@ -106,6 +106,13 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
      PRs are always skipped regardless.
    - Without a `config.json`, the legacy `.env` settings (`GITHUB_REPOS`,
      `WORKFLOWY_PARENT_ID`) are used instead.
+   - **`CONFIG_PATH`** _(optional, in `.env`)_ — path to the config file,
+     absolute or relative to the project root. Useful for keeping the config
+     out of this repo — e.g. in a private sibling repo shared with your team:
+
+     ```
+     CONFIG_PATH=../workflowy-sync-config/config.json
+     ```
 
 5. **Optional — watch Slack channels.** Create a Slack app at
    https://api.slack.com/apps with the bot token scopes `channels:history`,
