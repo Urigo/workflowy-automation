@@ -2,8 +2,6 @@
 config.json
 state.json
 node_modules/
-# Contains the real customer-channel inventory — never publish
-slack-channels.md
 
 # Claude Code local settings
 .claude/settings.local.json
