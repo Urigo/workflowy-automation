@@ -172,13 +172,42 @@ async function syncThreads(
   return counts;
 }
 
+/** Window for regular polls: catches new messages and replies on recent threads. */
+const RECENT_WINDOW_DAYS = 7;
+
+/** How often each channel's full lookbackDays history is re-fetched. */
+const FULL_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/** A channel with a message/reply newer than this counts as active. */
+const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** How often quiet (non-active) channels are checked for new messages. */
+const QUIET_POLL_INTERVAL_MS = 60 * 60 * 1000;
+
+/** How many channels are synced in parallel. */
+const SLACK_CONCURRENCY = 5;
+
 async function syncChannel(cfg: SlackChannelConfig): Promise<SlackSyncCounts> {
   const channels = (db.data.slackChannels ??= {});
   const state = (channels[cfg.channel] ??= { initialized: false, seen: [] });
 
   const channelName = await resolveChannelName(cfg.channel);
-  const oldest = String(Math.floor(Date.now() / 1000) - cfg.lookbackDays * 24 * 60 * 60);
+  // A reply on an old thread is only visible through its parent's latest_reply
+  // in the history fetch, so the full lookbackDays window is swept every few
+  // hours. The polls in between use a short window — enough for new messages
+  // and reply activity on recent threads — keeping the per-poll history calls
+  // small across hundreds of channels.
+  const now = Date.now();
+  const sweepDue = !state.initialized || now - (state.lastFullSweepAt ?? 0) >= FULL_SWEEP_INTERVAL_MS;
+  const windowDays = sweepDue ? cfg.lookbackDays : Math.min(RECENT_WINDOW_DAYS, cfg.lookbackDays);
+  const oldest = String(Math.floor(now / 1000) - windowDays * 24 * 60 * 60);
   const parents = (await fetchChannelMessages(cfg.channel, oldest)).filter(isTopLevelMessage);
+  if (sweepDue) state.lastFullSweepAt = now;
+  state.lastPolledAt = now;
+  for (const m of parents) {
+    const newest = m.latest_reply !== undefined && Number(m.latest_reply) > Number(m.ts) ? m.latest_reply : m.ts;
+    if (Number(newest) > Number(state.lastActivityTs ?? "0")) state.lastActivityTs = newest;
+  }
 
   if (!state.initialized && !env.BACKFILL_EXISTING) {
     // First time we see this channel: record existing messages as a baseline
@@ -255,12 +284,38 @@ export async function syncSlackChannels(): Promise<SlackSyncCounts> {
   }
   const configs = slackChannelConfigs.filter((cfg) => memberOf.has(cfg.channel));
 
-  for (const cfg of configs) {
-    try {
-      addCounts(total, await syncChannel(cfg));
-    } catch (err) {
-      console.error(`❌ Error syncing Slack channel ${cfg.channel}: ${errorMessage(err)}`);
-    }
+  // Most tracked channels are dormant — polling each one costs a full HTTP
+  // round-trip even when nothing happened. Channels with no activity in the
+  // last ACTIVE_WINDOW_MS are only checked every QUIET_POLL_INTERVAL_MS; the
+  // first message in one appears within that interval, and the channel then
+  // counts as active (checked every poll) from there on.
+  const now = Date.now();
+  const due = configs.filter((cfg) => {
+    const state = db.data.slackChannels?.[cfg.channel];
+    if (state === undefined || !state.initialized) return true;
+    if (now - Number(state.lastActivityTs ?? 0) * 1000 < ACTIVE_WINDOW_MS) return true;
+    return now - (state.lastPolledAt ?? 0) >= QUIET_POLL_INTERVAL_MS;
+  });
+  if (due.length < configs.length) {
+    console.log(`⏸️  Slack: ${configs.length - due.length} quiet channel(s) deferred this poll (checked hourly).`);
   }
+
+  // The per-channel calls are latency-bound, not rate-limited, so a few
+  // channels in flight at once cut wall-clock time ~SLACK_CONCURRENCY×.
+  // If Slack does throttle, ky's retries honor Retry-After and self-adjust.
+  const queue = [...due];
+  await Promise.all(
+    Array.from({ length: Math.min(SLACK_CONCURRENCY, queue.length) }, async () => {
+      for (let cfg = queue.shift(); cfg !== undefined; cfg = queue.shift()) {
+        try {
+          addCounts(total, await syncChannel(cfg));
+        } catch (err) {
+          console.error(`❌ Error syncing Slack channel ${cfg.channel}: ${errorMessage(err)}`);
+        }
+      }
+    }),
+  );
+  // Persist the cadence/sweep bookkeeping (bullet syncs already write per item).
+  await db.write();
   return total;
 }

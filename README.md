@@ -139,8 +139,16 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
    - **`parentId`** — where the channel's message bullets go; falls back to
      `defaults.parentId`.
    - **`lookbackDays`** _(optional, default `300`)_ — how far back the channel
-     history is scanned each poll. Threads older than this stop being watched
-     for new replies.
+     history is scanned. Threads older than this stop being watched for new
+     replies. To keep API volume manageable, the full window is only swept
+     every 6 hours per channel; the polls in between scan the last 7 days
+     (new messages and replies on recent threads appear within one poll, a
+     reply on an older thread within ~6 hours).
+   - Channels are synced a few at a time in parallel, and **quiet channels are
+     polled less often**: a channel with no message or reply in the last 7 days
+     is only checked hourly. The first message in a dormant channel therefore
+     appears within the hour — and the channel is back to being checked every
+     poll from then on.
    - **`track`** _(optional, default `true`)_ — set to `false` to keep a
      channel listed in the config without syncing it. Handy for maintaining a
      complete channel inventory while only tracking some of them.

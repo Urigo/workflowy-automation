@@ -37,6 +37,15 @@ export interface ChannelState {
    * decided by ts via seenReplies.
    */
   lastReplyTs?: Record<string, string>;
+  /**
+   * When (epoch ms) the channel's full lookbackDays history was last fetched.
+   * Polls in between use a short window; see syncChannel.
+   */
+  lastFullSweepAt?: number;
+  /** When (epoch ms) this channel was last polled — paces quiet channels. */
+  lastPolledAt?: number;
+  /** ts of the newest message/reply seen — decides the active-vs-quiet cadence. */
+  lastActivityTs?: string;
 }
 
 interface StateFile {
