@@ -137,6 +137,12 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
    - **`track`** _(optional, default `true`)_ — set to `false` to keep a
      channel listed in the config without syncing it. Handy for maintaining a
      complete channel inventory while only tracking some of them.
+   - Instead of inviting the bot channel by channel, set
+     `SLACK_AUTO_JOIN=true` in `.env` (needs the `channels:join` bot scope):
+     each poll, the bot joins any **public** tracked channel it isn't in yet.
+     Joining posts a "joined the channel" system message everyone in the
+     channel can see, so enable it deliberately. Private channels always
+     need a manual `/invite`.
 
 ## Run it
 

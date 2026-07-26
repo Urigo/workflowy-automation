@@ -2,11 +2,14 @@
 
 import { env, slackChannelConfigs, type SlackChannelConfig } from "./config.ts";
 import {
+  channelLabel,
   fetchBotChannelIds,
   fetchChannelMessages,
   fetchThreadReplies,
   humanizeText,
+  joinChannel,
   messagePermalink,
+  preloadChannelNames,
   resolveAuthor,
   resolveChannelName,
   type SlackMessage,
@@ -220,11 +223,37 @@ export async function syncSlackChannels(): Promise<SlackSyncCounts> {
     console.error(`❌ Slack: listing the bot's channels failed: ${errorMessage(err)}`);
     return total;
   }
-  const configs = slackChannelConfigs.filter((cfg) => memberOf.has(cfg.channel));
-  const skipped = slackChannelConfigs.length - configs.length;
-  if (skipped > 0) {
-    console.log(`⏭️  Slack: skipping ${skipped} tracked channel(s) the bot isn't in (invite it with /invite).`);
+  let skipped = slackChannelConfigs.filter((cfg) => !memberOf.has(cfg.channel));
+  if (skipped.length > 0) {
+    try {
+      await preloadChannelNames(); // so join/skip logs show names, not ids
+    } catch (err) {
+      console.warn(`⚠️  Slack: loading channel names failed: ${errorMessage(err)}`);
+    }
   }
+
+  // Public channels can be joined without an invite (SLACK_AUTO_JOIN=true).
+  if (skipped.length > 0 && env.SLACK_AUTO_JOIN) {
+    for (const cfg of skipped) {
+      try {
+        await joinChannel(cfg.channel);
+        memberOf.add(cfg.channel);
+        console.log(`➕ Slack: joined ${channelLabel(cfg.channel)}.`);
+      } catch (err) {
+        // Private channels can't be self-joined — they still need an /invite.
+        console.warn(`⚠️  Slack: couldn't join ${channelLabel(cfg.channel)}: ${errorMessage(err)}`);
+      }
+    }
+    skipped = slackChannelConfigs.filter((cfg) => !memberOf.has(cfg.channel));
+  }
+
+  if (skipped.length > 0) {
+    console.log(
+      `⏭️  Slack: skipping ${skipped.length} tracked channel(s) the bot isn't in (invite it with /invite): ` +
+        skipped.map((cfg) => channelLabel(cfg.channel)).join(", "),
+    );
+  }
+  const configs = slackChannelConfigs.filter((cfg) => memberOf.has(cfg.channel));
 
   for (const cfg of configs) {
     try {

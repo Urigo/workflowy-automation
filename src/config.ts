@@ -15,6 +15,9 @@ export const env = cleanEnv(process.env, {
   GITHUB_TOKEN: str({ desc: "GitHub token with read access to the repos" }),
   WORKFLOWY_API_KEY: str({ desc: "API key from https://workflowy.com/api-key" }),
   SLACK_BOT_TOKEN: str({ default: "", desc: "Slack bot token (xoxb-…) — required when config.json lists slackChannels" }),
+  // Joining posts a "joined the channel" system message visible to everyone
+  // in the channel — enable deliberately. Needs the channels:join bot scope.
+  SLACK_AUTO_JOIN: bool({ default: false, desc: "Auto-join public tracked channels the bot isn't in yet" }),
   // Legacy fallbacks, used only when there is no config.json.
   GITHUB_REPOS: str({ default: "", desc: 'Comma-separated repos (fallback when config.json is absent)' }),
   WORKFLOWY_PARENT_ID: str({ default: "inbox" }),

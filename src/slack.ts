@@ -67,16 +67,50 @@ export async function fetchBotChannelIds(): Promise<Set<string>> {
   const ids = new Set<string>();
   let cursor: string | undefined;
   do {
-    const res = await slackGet<{ channels: { id: string }[] }>("users.conversations", {
+    const res = await slackGet<{ channels: { id: string; name?: string }[] }>("users.conversations", {
       types: "public_channel,private_channel",
       exclude_archived: "true",
       limit: "200",
       ...(cursor === undefined ? {} : { cursor }),
     });
-    for (const c of res.channels) ids.add(c.id);
+    for (const c of res.channels) {
+      ids.add(c.id);
+      if (c.name !== undefined) channelNames.set(c.id, c.name);
+    }
     cursor = res.response_metadata?.next_cursor || undefined;
   } while (cursor !== undefined);
   return ids;
+}
+
+let allChannelNamesLoaded = false;
+
+/** Loads every visible channel's name into the cache (a few list requests). */
+export async function preloadChannelNames(): Promise<void> {
+  if (allChannelNamesLoaded) return;
+  let cursor: string | undefined;
+  do {
+    const res = await slackGet<{ channels: { id: string; name?: string }[] }>("conversations.list", {
+      types: "public_channel,private_channel",
+      exclude_archived: "true",
+      limit: "200",
+      ...(cursor === undefined ? {} : { cursor }),
+    });
+    for (const c of res.channels) if (c.name !== undefined) channelNames.set(c.id, c.name);
+    cursor = res.response_metadata?.next_cursor || undefined;
+  } while (cursor !== undefined);
+  allChannelNamesLoaded = true;
+}
+
+/** "#name" when the channel's name is known, otherwise the bare id. */
+export function channelLabel(id: string): string {
+  const name = channelNames.get(id);
+  return name === undefined ? id : `#${name}`;
+}
+
+/** Joins a public channel — bots can self-join with the channels:join scope. */
+export async function joinChannel(channel: string): Promise<void> {
+  const res = await slack.post("conversations.join", { searchParams: { channel } }).json<SlackResponse>();
+  if (!res.ok) throw new Error(`Slack conversations.join failed: ${res.error ?? "unknown error"}`);
 }
 
 const userNames = new Map<string, string>();
