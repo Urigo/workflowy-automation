@@ -173,10 +173,10 @@ async function syncThreads(
 }
 
 /** Window for regular polls: catches new messages and replies on recent threads. */
-const RECENT_WINDOW_DAYS = 7;
+const RECENT_WINDOW_DAYS = 30;
 
 /** How often each channel's full lookbackDays history is re-fetched. */
-const FULL_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const FULL_SWEEP_INTERVAL_MS = 2 * 60 * 60 * 1000;
 
 /** A channel with a message/reply newer than this counts as active. */
 const ACTIVE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;

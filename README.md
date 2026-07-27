@@ -141,9 +141,9 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
    - **`lookbackDays`** _(optional, default `300`)_ — how far back the channel
      history is scanned. Threads older than this stop being watched for new
      replies. To keep API volume manageable, the full window is only swept
-     every 6 hours per channel; the polls in between scan the last 7 days
+     every 2 hours per channel; the polls in between scan the last 30 days
      (new messages and replies on recent threads appear within one poll, a
-     reply on an older thread within ~6 hours).
+     reply on an older thread within ~2 hours).
    - Channels are synced a few at a time in parallel, and **quiet channels are
      polled less often**: a channel with no message or reply in the last 7 days
      is only checked hourly. The first message in a dormant channel therefore
