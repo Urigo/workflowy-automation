@@ -10,10 +10,15 @@ your GitHub repositories — and keep it updated as the conversation continues:
 - **New comment** on a tracked issue/PR → a `💬` sub-bullet under its task,
   linking to the comment.
 - **New comment on an issue/PR that isn't in Workflowy yet** (e.g. one that
-  predates the sync) → its task is created retroactively, with all of its
-  existing comments brought along.
+  predates the sync, is already closed, or whose bullet was deleted in
+  Workflowy) → its task is created retroactively, with all of its existing
+  comments brought along; for a closed issue the task is marked complete
+  right away.
 - **Issue/PR closed or merged** → its task is marked complete; **reopened** →
   the task is brought back.
+- **Bullet deleted in Workflowy** → the deletion is respected: the sync stops
+  updating that task (no retry loop). Only new comment activity brings it
+  back, as above.
 
 It can also watch **Slack channels** (e.g. shared channels with customers),
 treating each channel message like an issue and its thread like the issue's
@@ -21,8 +26,9 @@ comments:
 
 - **New channel message** → a `💬` bullet under that channel's configured
   parent, with the full text in a sub-bullet when it doesn't fit the bullet
-  name. The bullet text links to the original message in Slack. Bot and
-  system messages (joins, pins, …) are skipped.
+  name. The bullet text links to the original message in Slack. Bot messages
+  are synced like any other (some channels, e.g. Crisp relays, speak entirely
+  through bots); system messages (joins, pins, …) are skipped.
 - **New thread reply** on a tracked message → a `💬` sub-bullet under it,
   linking to the reply in its thread.
 - **New thread reply on a message that isn't in Workflowy yet** (e.g. one that

@@ -1,5 +1,6 @@
 /** Core sync logic: diff issues/comments against seen-state, create bullets, persist. */
 
+import { HTTPError } from "ky";
 import { env, repoConfigs, slackChannelConfigs, type RepoConfig } from "./config.ts";
 import {
   fetchIssue,
@@ -36,6 +37,11 @@ const zeroCounts = (): SyncCounts => ({ tasks: 0, prTasks: 0, linked: 0, comment
 interface TrackedItem {
   item: GitHubIssue;
   isPull: boolean;
+}
+
+/** True when Workflowy answered 404 — the node was deleted by the user. */
+function isNodeGone(err: unknown): boolean {
+  return err instanceof HTTPError && err.response.status === 404;
 }
 
 function addCounts(target: SyncCounts, add: SyncCounts): void {
@@ -155,28 +161,61 @@ async function syncComments(
 
   for (const comment of await fetchRepoComments(cfg.repo, since)) {
     const issueNumber = issueNumberFromUrl(comment.issue_url);
-    const tracked = issueNumber === undefined ? undefined : itemsByNumber.get(issueNumber);
 
-    if (seenComments.includes(comment.id) || issueNumber === undefined || !tracked) {
-      // Already handled, or a comment on an untracked item (closed issue,
-      // bot PR, …): skip it, but remember the id so the skip stays cheap.
+    if (seenComments.includes(comment.id) || issueNumber === undefined) {
       if (!seenComments.includes(comment.id)) seenComments.push(comment.id);
       if (comment.updated_at > watermark) watermark = comment.updated_at;
       continue;
     }
 
     try {
+      // An item missing from the open list is usually a closed issue. Closed
+      // issues keep collecting comments like open ones — their task is
+      // created/relinked if needed, and syncClosedIssues (which runs right
+      // after this pass) marks the recreated bullet complete again.
+      let tracked = itemsByNumber.get(issueNumber);
+      if (tracked === undefined) {
+        let issue;
+        try {
+          issue = await fetchIssue(cfg.repo, issueNumber);
+        } catch (err) {
+          if ((err as { status?: number }).status !== 404) throw err;
+          // Deleted or transferred away — nothing to track.
+        }
+        const isPull = issue?.pull_request !== undefined;
+        if (issue === undefined || (isPull && (!cfg.trackPullRequests || isBot(issue.user)))) {
+          // Gone, or a PR this repo doesn't track: skip, remember the id.
+          seenComments.push(comment.id);
+          if (comment.updated_at > watermark) watermark = comment.updated_at;
+          continue;
+        }
+        tracked = { item: issue, isPull };
+      }
+
       const taskId = repoState.taskIds?.[issueNumber];
       if (taskId === undefined) {
         // Comment activity on an item with no Workflowy task (e.g. part of
         // the initial baseline): create/link the task and import all comments.
         addCounts(counts, await trackItem(cfg, repoState, tracked));
+        // A freshly created bullet is uncompleted — clear any stale completion
+        // so syncClosedIssues re-completes it if the issue is closed.
+        repoState.completedIssues = (repoState.completedIssues ?? []).filter((n) => n !== issueNumber);
       } else {
-        await createCommentBullet(taskId, comment);
-        seenComments.push(comment.id);
-        counts.comments += 1;
-        await db.write();
-        console.log(`💬 ${cfg.repo}#${issueNumber}: comment by @${comment.user?.login ?? "unknown"} added.`);
+        try {
+          await createCommentBullet(taskId, comment);
+          seenComments.push(comment.id);
+          counts.comments += 1;
+          await db.write();
+          console.log(`💬 ${cfg.repo}#${issueNumber}: comment by @${comment.user?.login ?? "unknown"} added.`);
+        } catch (err) {
+          if (!isNodeGone(err)) throw err;
+          // The task bullet was deleted in Workflowy — recreate it with its
+          // whole comment history (this comment included).
+          delete repoState.taskIds?.[issueNumber];
+          addCounts(counts, await trackItem(cfg, repoState, tracked));
+          repoState.completedIssues = (repoState.completedIssues ?? []).filter((n) => n !== issueNumber);
+          await db.write();
+        }
       }
       if (comment.updated_at > watermark) watermark = comment.updated_at;
     } catch (err) {
@@ -215,21 +254,38 @@ async function syncClosedIssues(
     try {
       if (isOpen && isCompleted) {
         // Issue was reopened: bring the task back.
-        await setNodeCompleted(taskId, false);
+        try {
+          await setNodeCompleted(taskId, false);
+          counts.reopened += 1;
+          console.log(`↩️  ${cfg.repo}#${issueNumber} reopened → Workflowy task uncompleted.`);
+        } catch (err) {
+          if (!isNodeGone(err)) throw err;
+          // Its bullet was deleted in Workflowy — recreate it for the reopened issue.
+          delete repoState.taskIds?.[key];
+          const tracked = itemsByNumber.get(issueNumber);
+          if (tracked !== undefined) addCounts(counts, await trackItem(cfg, repoState, tracked));
+        }
         repoState.completedIssues = completed.filter((n) => n !== issueNumber);
-        counts.reopened += 1;
         await db.write();
-        console.log(`↩️  ${cfg.repo}#${issueNumber} reopened → Workflowy task uncompleted.`);
       } else if (!isOpen && !isCompleted) {
         // Vanished from the open list — confirm it's actually closed
         // (and not, say, transferred) before completing the task.
         const issue = await fetchIssue(cfg.repo, issueNumber);
         if (issue?.state !== "closed") continue;
-        await setNodeCompleted(taskId, true);
-        completed.push(issueNumber);
-        counts.completed += 1;
+        try {
+          await setNodeCompleted(taskId, true);
+          completed.push(issueNumber);
+          counts.completed += 1;
+          console.log(`☑️  ${cfg.repo}#${issueNumber} closed → Workflowy task completed.`);
+        } catch (err) {
+          if (!isNodeGone(err)) throw err;
+          // Its bullet was deleted in Workflowy — nothing left to complete.
+          // Drop the mapping so this issue isn't retried every poll; a future
+          // comment on it recreates the bullet via syncComments.
+          delete repoState.taskIds?.[key];
+          console.log(`🗑️  ${cfg.repo}#${issueNumber} closed, but its bullet was deleted in Workflowy — dropped.`);
+        }
         await db.write();
-        console.log(`☑️  ${cfg.repo}#${issueNumber} closed → Workflowy task completed.`);
       }
     } catch (err) {
       // Leave state untouched so this issue is retried on the next poll.
