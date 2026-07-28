@@ -39,11 +39,14 @@ function tsToWhen(ts: string): string {
   return new Date(Number(ts.split(".")[0]) * 1000).toISOString().slice(0, 16).replace("T", " ");
 }
 
-/** Channel messages that should become bullets: top-level human messages. */
+/**
+ * Channel messages that should become bullets: top-level, non-empty messages.
+ * Bot messages count too — channels like #crisp-chats relay whole customer
+ * conversations through a bot. System messages (joins, pins, …) don't.
+ */
 function isTopLevelMessage(msg: SlackMessage): boolean {
   return (
-    msg.subtype === undefined &&
-    msg.bot_id === undefined &&
+    (msg.subtype === undefined || msg.subtype === "bot_message") &&
     (msg.thread_ts === undefined || msg.thread_ts === msg.ts) &&
     (msg.text?.trim() ?? "") !== ""
   );
@@ -198,7 +201,10 @@ async function syncChannel(cfg: SlackChannelConfig): Promise<SlackSyncCounts> {
   // and reply activity on recent threads — keeping the per-poll history calls
   // small across hundreds of channels.
   const now = Date.now();
-  const sweepDue = !state.initialized || now - (state.lastFullSweepAt ?? 0) >= FULL_SWEEP_INTERVAL_MS;
+  const sweepDue =
+    !state.initialized ||
+    !state.botMessagesInitialized || // the bot baseline below must see the full window
+    now - (state.lastFullSweepAt ?? 0) >= FULL_SWEEP_INTERVAL_MS;
   const windowDays = sweepDue ? cfg.lookbackDays : Math.min(RECENT_WINDOW_DAYS, cfg.lookbackDays);
   const oldest = String(Math.floor(now / 1000) - windowDays * 24 * 60 * 60);
   const parents = (await fetchChannelMessages(cfg.channel, oldest)).filter(isTopLevelMessage);
@@ -213,6 +219,7 @@ async function syncChannel(cfg: SlackChannelConfig): Promise<SlackSyncCounts> {
     // First time we see this channel: record existing messages as a baseline
     // instead of flooding Workflowy with the recent history.
     state.initialized = true;
+    state.botMessagesInitialized = true;
     state.seen = parents.map((m) => m.ts);
     state.lastReplyTs = {};
     for (const m of parents) {
@@ -221,6 +228,25 @@ async function syncChannel(cfg: SlackChannelConfig): Promise<SlackSyncCounts> {
     await db.write();
     console.log(`📌 #${channelName}: baseline set (${parents.length} message(s) marked as seen).`);
     return zeroCounts();
+  }
+
+  // Channel predates bot-message tracking: baseline its existing bot messages
+  // once, so only bot messages posted from now on become bullets.
+  if (!state.botMessagesInitialized) {
+    state.botMessagesInitialized = true;
+    if (!env.BACKFILL_EXISTING) {
+      const bots = parents.filter(
+        (m) => (m.bot_id !== undefined || m.subtype === "bot_message") && !state.seen.includes(m.ts),
+      );
+      for (const m of bots) {
+        state.seen.push(m.ts);
+        if (m.latest_reply !== undefined) (state.lastReplyTs ??= {})[m.ts] = m.latest_reply;
+      }
+      if (bots.length > 0) {
+        console.log(`📌 #${channelName}: bot-message baseline set (${bots.length} existing bot message(s) marked as seen).`);
+      }
+    }
+    await db.write();
   }
 
   const counts = zeroCounts();

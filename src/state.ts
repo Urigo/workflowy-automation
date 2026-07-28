@@ -25,6 +25,8 @@ export interface RepoState {
 
 export interface ChannelState {
   initialized: boolean;
+  /** Set once existing bot messages have been baselined for this channel. */
+  botMessagesInitialized?: boolean;
   /** Message ts values already handled (baselined or turned into bullets). */
   seen: string[];
   /** Message ts → Workflowy node id of that message's bullet. */
