@@ -32,8 +32,8 @@ comments:
 - **New thread reply** on a tracked message → a `💬` sub-bullet under it,
   linking to the reply in its thread.
 - **New thread reply on a message that isn't in Workflowy yet** (e.g. one that
-  predates the sync) → the message's bullet is created retroactively, with the
-  whole thread brought along.
+  predates the sync, or whose bullet was deleted in Workflowy) → the message's
+  bullet is created retroactively, with the whole thread brought along.
 
 It works by **polling**: every few minutes the app asks GitHub for new issues
 and creates a matching task in Workflowy via the official Workflowy API. No

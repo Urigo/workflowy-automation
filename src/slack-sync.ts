@@ -15,7 +15,7 @@ import {
   type SlackMessage,
 } from "./slack.ts";
 import { db, type ChannelState } from "./state.ts";
-import { errorMessage } from "./util.ts";
+import { errorMessage, isNodeGone } from "./util.ts";
 import {
   createSlackMessageBullet,
   createSlackReplyBullet,
@@ -159,11 +159,27 @@ async function syncThreads(
         addCounts(counts, await trackMessage(cfg, state, channelName, msg));
         continue;
       }
-      for (const reply of await fetchThreadReplies(cfg.channel, msg.ts)) {
-        if (skipReply(state, msg.ts, reply)) continue;
-        const content = await addReply(cfg, state, nodeId, reply);
-        counts.replies += 1;
-        console.log(`💬 #${channelName}: thread reply by @${content.author} added.`);
+      const replies = await fetchThreadReplies(cfg.channel, msg.ts);
+      try {
+        for (const reply of replies) {
+          if (skipReply(state, msg.ts, reply)) continue;
+          const content = await addReply(cfg, state, nodeId, reply);
+          counts.replies += 1;
+          console.log(`💬 #${channelName}: thread reply by @${content.author} added.`);
+        }
+      } catch (err) {
+        if (!isNodeGone(err)) throw err;
+        // The message's bullet was deleted in Workflowy — recreate it with the
+        // whole thread. Forget the thread's synced replies first: their
+        // sub-bullets died with the deleted bullet.
+        delete state.taskIds?.[msg.ts];
+        const threadTs = new Set(replies.map((r) => r.ts));
+        if (state.seenReplies !== undefined) {
+          state.seenReplies = state.seenReplies.filter((ts) => !threadTs.has(ts));
+        }
+        console.log(`🗑️  #${channelName}: a message bullet was deleted in Workflowy — recreating it with its thread.`);
+        addCounts(counts, await trackMessage(cfg, state, channelName, msg));
+        continue; // trackMessage already advanced lastReplyTs and persisted
       }
       lastReply[msg.ts] = msg.latest_reply;
       await db.write();

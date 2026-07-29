@@ -1,6 +1,5 @@
 /** Core sync logic: diff issues/comments against seen-state, create bullets, persist. */
 
-import { HTTPError } from "ky";
 import { env, repoConfigs, slackChannelConfigs, type RepoConfig } from "./config.ts";
 import {
   fetchIssue,
@@ -13,7 +12,7 @@ import {
 } from "./github.ts";
 import { syncSlackChannels } from "./slack-sync.ts";
 import { db, type RepoState } from "./state.ts";
-import { errorMessage } from "./util.ts";
+import { errorMessage, isNodeGone } from "./util.ts";
 import {
   clearWorkflowyCache,
   createCommentBullet,
@@ -39,11 +38,6 @@ interface TrackedItem {
   isPull: boolean;
 }
 
-/** True when Workflowy answered 404 — the node was deleted by the user. */
-function isNodeGone(err: unknown): boolean {
-  return err instanceof HTTPError && err.response.status === 404;
-}
-
 function addCounts(target: SyncCounts, add: SyncCounts): void {
   target.tasks += add.tasks;
   target.prTasks += add.prTasks;
@@ -51,6 +45,21 @@ function addCounts(target: SyncCounts, add: SyncCounts): void {
   target.comments += add.comments;
   target.completed += add.completed;
   target.reopened += add.reopened;
+}
+
+/**
+ * Forgets an issue's synced comment ids so the next trackItem re-imports the
+ * full history. Used when the issue's bullet was deleted in Workflowy — the
+ * synced comment sub-bullets died with it.
+ */
+async function forgetIssueComments(cfg: RepoConfig, repoState: RepoState, issueNumber: number): Promise<void> {
+  const seen = repoState.seenComments;
+  if (seen === undefined || seen.length === 0) return;
+  const ids = new Set((await fetchIssueComments(cfg.repo, issueNumber)).map((c) => c.id));
+  for (let i = seen.length - 1; i >= 0; i--) {
+    const id = seen[i];
+    if (id !== undefined && ids.has(id)) seen.splice(i, 1);
+  }
 }
 
 /** Records an issue as tracked (task node known, issue seen) and persists. */
@@ -212,6 +221,7 @@ async function syncComments(
           // The task bullet was deleted in Workflowy — recreate it with its
           // whole comment history (this comment included).
           delete repoState.taskIds?.[issueNumber];
+          await forgetIssueComments(cfg, repoState, issueNumber);
           addCounts(counts, await trackItem(cfg, repoState, tracked));
           repoState.completedIssues = (repoState.completedIssues ?? []).filter((n) => n !== issueNumber);
           await db.write();
@@ -263,7 +273,10 @@ async function syncClosedIssues(
           // Its bullet was deleted in Workflowy — recreate it for the reopened issue.
           delete repoState.taskIds?.[key];
           const tracked = itemsByNumber.get(issueNumber);
-          if (tracked !== undefined) addCounts(counts, await trackItem(cfg, repoState, tracked));
+          if (tracked !== undefined) {
+            await forgetIssueComments(cfg, repoState, issueNumber);
+            addCounts(counts, await trackItem(cfg, repoState, tracked));
+          }
         }
         repoState.completedIssues = completed.filter((n) => n !== issueNumber);
         await db.write();
