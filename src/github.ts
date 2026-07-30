@@ -3,7 +3,17 @@
 import { Octokit } from "octokit";
 import { env } from "./config.ts";
 
-const octokit = new Octokit({ auth: env.GITHUB_TOKEN });
+/** One cached Octokit per distinct token — repos may use different tokens. */
+const octokits = new Map<string, Octokit>();
+
+function octokitFor(token: string = env.GITHUB_TOKEN): Octokit {
+  let client = octokits.get(token);
+  if (client === undefined) {
+    client = new Octokit({ auth: token });
+    octokits.set(token, client);
+  }
+  return client;
+}
 
 /** Exact issue/PR item type from octokit's response — no hand-written approximation. */
 export type GitHubIssue = Awaited<ReturnType<typeof fetchOpenItems>>["issues"][number];
@@ -24,9 +34,10 @@ function parseRepo(repo: string): { owner: string; name: string } | undefined {
  * All open issues AND pull requests of a repo, in one paginated fetch —
  * the issues endpoint returns both, distinguished by the pull_request marker.
  */
-export async function fetchOpenItems(repo: string) {
+export async function fetchOpenItems(repo: string, token?: string) {
   const parsed = parseRepo(repo);
   if (!parsed) return { issues: [], pulls: [] };
+  const octokit = octokitFor(token);
   const items = await octokit.paginate(octokit.rest.issues.listForRepo, {
     owner: parsed.owner,
     repo: parsed.name,
@@ -45,9 +56,10 @@ export function isBot(user: GitHubIssue["user"]): boolean {
 }
 
 /** All comments of a single issue, oldest first. */
-export async function fetchIssueComments(repo: string, issueNumber: number) {
+export async function fetchIssueComments(repo: string, issueNumber: number, token?: string) {
   const parsed = parseRepo(repo);
   if (!parsed) return [];
+  const octokit = octokitFor(token);
   return octokit.paginate(octokit.rest.issues.listComments, {
     owner: parsed.owner,
     repo: parsed.name,
@@ -60,9 +72,10 @@ export async function fetchIssueComments(repo: string, issueNumber: number) {
  * All issue comments of a repo updated after `since`, oldest first.
  * (Includes comments on pull requests and closed issues — callers filter.)
  */
-export async function fetchRepoComments(repo: string, since: string) {
+export async function fetchRepoComments(repo: string, since: string, token?: string) {
   const parsed = parseRepo(repo);
   if (!parsed) return [];
+  const octokit = octokitFor(token);
   return octokit.paginate(octokit.rest.issues.listCommentsForRepo, {
     owner: parsed.owner,
     repo: parsed.name,
@@ -74,10 +87,10 @@ export async function fetchRepoComments(repo: string, since: string) {
 }
 
 /** One issue's current state — used to confirm a vanished issue was closed. */
-export async function fetchIssue(repo: string, issueNumber: number) {
+export async function fetchIssue(repo: string, issueNumber: number, token?: string) {
   const parsed = parseRepo(repo);
   if (!parsed) return undefined;
-  const { data } = await octokit.rest.issues.get({
+  const { data } = await octokitFor(token).rest.issues.get({
     owner: parsed.owner,
     repo: parsed.name,
     issue_number: issueNumber,

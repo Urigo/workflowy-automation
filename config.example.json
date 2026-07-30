@@ -7,7 +7,8 @@
   "repos": [
     { "repo": "my-org/api", "parentId": "node-id-for-api-issues" },
     { "repo": "my-org/web", "parentId": "node-id-for-web-issues", "searchRootId": "override-per-repo" },
-    { "repo": "my-org/docs", "pullRequests": false }
+    { "repo": "my-org/docs", "pullRequests": false },
+    { "repo": "other-org/private-repo", "tokenEnv": "GITHUB_TOKEN_OTHER_ORG" }
   ],
   "slackChannels": [
     { "channel": "C0123ABCDE", "parentId": "node-id-for-this-channels-messages" }, // #ext-some-customer

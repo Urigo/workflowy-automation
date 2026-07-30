@@ -42,6 +42,12 @@ export interface RepoConfig {
   searchRootId?: string;
   /** Whether new pull requests also become tasks (bot PRs are always skipped). */
   trackPullRequests: boolean;
+  /**
+   * GitHub token for this repo, resolved from the env var named by the
+   * config's tokenEnv. Fine-grained PATs are scoped to one org — repos of
+   * another org need their own token. Absent: GITHUB_TOKEN is used.
+   */
+  token?: string;
 }
 
 /**
@@ -64,6 +70,7 @@ const configFileSchema = z.object({
       parentId: z.string().min(1).optional(),
       searchRootId: z.string().min(1).optional(),
       pullRequests: z.boolean().optional(),
+      tokenEnv: z.string().min(1).optional(),
     })
     .optional(),
   repos: z
@@ -73,6 +80,7 @@ const configFileSchema = z.object({
         parentId: z.string().min(1).optional(),
         searchRootId: z.string().min(1).optional(),
         pullRequests: z.boolean().optional(),
+        tokenEnv: z.string().min(1).optional(),
       }),
     )
     .min(1),
@@ -183,11 +191,20 @@ function loadConfigs(): LoadedConfigs {
     return {
       repos: repos.map((r) => {
         const searchRootId = r.searchRootId ?? defaults?.searchRootId;
+        const tokenEnv = r.tokenEnv ?? defaults?.tokenEnv;
+        let token: string | undefined;
+        if (tokenEnv !== undefined) {
+          token = process.env[tokenEnv];
+          if (token === undefined || token === "") {
+            fail(`config.json: repo "${r.repo}" uses tokenEnv "${tokenEnv}", but that variable is not set in .env`);
+          }
+        }
         return {
           repo: r.repo,
           parentId: r.parentId ?? defaults?.parentId ?? env.WORKFLOWY_PARENT_ID,
           trackPullRequests: r.pullRequests ?? defaults?.pullRequests ?? true,
           ...(searchRootId === undefined ? {} : { searchRootId }),
+          ...(token === undefined ? {} : { token }),
         };
       }),
       slackChannels: channels,

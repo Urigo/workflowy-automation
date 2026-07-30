@@ -110,6 +110,13 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
    - **`pullRequests`** _(optional, default `true`)_ — set to `false` (per
      repo or in `defaults`) to skip PR tracking for that repo. Bot-authored
      PRs are always skipped regardless.
+   - **`tokenEnv`** _(optional)_ — name of an `.env` variable holding the
+     GitHub token to use for this repo instead of `GITHUB_TOKEN`. Needed for
+     private repos of another org when using fine-grained PATs, which are
+     scoped to a single org: create a second token with the other org as
+     resource owner (permissions: Issues + Pull requests + Metadata, all
+     read-only), put it in `.env` (e.g. `GITHUB_TOKEN_OTHER_ORG=github_pat_…`)
+     and reference it: `{ "repo": "other-org/api", "tokenEnv": "GITHUB_TOKEN_OTHER_ORG" }`.
    - Without a `config.json`, the legacy `.env` settings (`GITHUB_REPOS`,
      `WORKFLOWY_PARENT_ID`) are used instead.
    - **`CONFIG_PATH`** _(optional, in `.env`)_ — path to the config file,

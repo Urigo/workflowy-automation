@@ -55,7 +55,7 @@ function addCounts(target: SyncCounts, add: SyncCounts): void {
 async function forgetIssueComments(cfg: RepoConfig, repoState: RepoState, issueNumber: number): Promise<void> {
   const seen = repoState.seenComments;
   if (seen === undefined || seen.length === 0) return;
-  const ids = new Set((await fetchIssueComments(cfg.repo, issueNumber)).map((c) => c.id));
+  const ids = new Set((await fetchIssueComments(cfg.repo, issueNumber, cfg.token)).map((c) => c.id));
   for (let i = seen.length - 1; i >= 0; i--) {
     const id = seen[i];
     if (id !== undefined && ids.has(id)) seen.splice(i, 1);
@@ -107,7 +107,7 @@ async function trackItem(
   // Bring over all comments the issue already has.
   const seenComments = (repoState.seenComments ??= []);
   try {
-    for (const comment of await fetchIssueComments(repo, issue.number)) {
+    for (const comment of await fetchIssueComments(repo, issue.number, cfg.token)) {
       if (seenComments.includes(comment.id)) continue;
       await createCommentBullet(taskId, comment);
       seenComments.push(comment.id);
@@ -168,7 +168,7 @@ async function syncComments(
   const counts = zeroCounts();
   let watermark = since;
 
-  for (const comment of await fetchRepoComments(cfg.repo, since)) {
+  for (const comment of await fetchRepoComments(cfg.repo, since, cfg.token)) {
     const issueNumber = issueNumberFromUrl(comment.issue_url);
 
     if (seenComments.includes(comment.id) || issueNumber === undefined) {
@@ -186,7 +186,7 @@ async function syncComments(
       if (tracked === undefined) {
         let issue;
         try {
-          issue = await fetchIssue(cfg.repo, issueNumber);
+          issue = await fetchIssue(cfg.repo, issueNumber, cfg.token);
         } catch (err) {
           if ((err as { status?: number }).status !== 404) throw err;
           // Deleted or transferred away — nothing to track.
@@ -283,7 +283,7 @@ async function syncClosedIssues(
       } else if (!isOpen && !isCompleted) {
         // Vanished from the open list — confirm it's actually closed
         // (and not, say, transferred) before completing the task.
-        const issue = await fetchIssue(cfg.repo, issueNumber);
+        const issue = await fetchIssue(cfg.repo, issueNumber, cfg.token);
         if (issue?.state !== "closed") continue;
         try {
           await setNodeCompleted(taskId, true);
@@ -311,7 +311,7 @@ async function syncClosedIssues(
 async function syncRepo(cfg: RepoConfig): Promise<SyncCounts> {
   const repoState = (db.data.repos[cfg.repo] ??= { initialized: false, seen: [] });
 
-  const { issues, pulls: allPulls } = await fetchOpenItems(cfg.repo);
+  const { issues, pulls: allPulls } = await fetchOpenItems(cfg.repo, cfg.token);
   // Bot PRs (dependabot, renovate, …) never become tasks.
   const pulls = cfg.trackPullRequests ? allPulls.filter((p) => !isBot(p.user)) : [];
 
