@@ -6,12 +6,15 @@ import {
   fetchBotChannelIds,
   fetchChannelMessages,
   fetchThreadReplies,
+  fetchUserChannelIds,
+  hasUserToken,
   humanizeText,
   joinChannel,
   messagePermalink,
   preloadChannelNames,
   resolveAuthor,
   resolveChannelName,
+  routeChannelsThroughUserToken,
   type SlackMessage,
 } from "./slack.ts";
 import { db, type ChannelState } from "./state.ts";
@@ -294,7 +297,28 @@ export async function syncSlackChannels(): Promise<SlackSyncCounts> {
     console.error(`❌ Slack: listing the bot's channels failed: ${errorMessage(err)}`);
     return total;
   }
-  let skipped = slackChannelConfigs.filter((cfg) => !memberOf.has(cfg.channel));
+
+  // Private channels the bot can't be invited to are read with the user token
+  // (SLACK_USER_TOKEN) when its user is a member. Bot membership wins so that
+  // public-channel syncing never depends on the personal token.
+  const viaUser = new Set<string>();
+  if (hasUserToken) {
+    try {
+      const userChannels = await fetchUserChannelIds();
+      for (const cfg of slackChannelConfigs) {
+        if (!memberOf.has(cfg.channel) && userChannels.has(cfg.channel)) viaUser.add(cfg.channel);
+      }
+    } catch (err) {
+      console.error(`❌ Slack: listing the user token's channels failed: ${errorMessage(err)}`);
+    }
+  }
+  routeChannelsThroughUserToken(viaUser);
+  if (viaUser.size > 0) {
+    console.log(`👤 Slack: reading ${viaUser.size} channel(s) via the user token (bot not a member).`);
+  }
+
+  const readable = (id: string): boolean => memberOf.has(id) || viaUser.has(id);
+  let skipped = slackChannelConfigs.filter((cfg) => !readable(cfg.channel));
   if (skipped.length > 0) {
     try {
       await preloadChannelNames(); // so join/skip logs show names, not ids
@@ -315,7 +339,7 @@ export async function syncSlackChannels(): Promise<SlackSyncCounts> {
         console.warn(`⚠️  Slack: couldn't join ${channelLabel(cfg.channel)}: ${errorMessage(err)}`);
       }
     }
-    skipped = slackChannelConfigs.filter((cfg) => !memberOf.has(cfg.channel));
+    skipped = slackChannelConfigs.filter((cfg) => !readable(cfg.channel));
   }
 
   if (skipped.length > 0) {
@@ -324,7 +348,7 @@ export async function syncSlackChannels(): Promise<SlackSyncCounts> {
         skipped.map((cfg) => channelLabel(cfg.channel)).join(", "),
     );
   }
-  const configs = slackChannelConfigs.filter((cfg) => memberOf.has(cfg.channel));
+  const configs = slackChannelConfigs.filter((cfg) => readable(cfg.channel));
 
   // Most tracked channels are dormant — polling each one costs a full HTTP
   // round-trip even when nothing happened. Channels with no activity in the

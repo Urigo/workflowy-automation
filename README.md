@@ -171,6 +171,14 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
      Joining posts a "joined the channel" system message everyone in the
      channel can see, so enable it deliberately. Private channels always
      need a manual `/invite`.
+   - **`SLACK_USER_TOKEN`** _(optional, in `.env`)_ — a user token (`xoxp-…`)
+     used as a read fallback for tracked channels the bot isn't in, e.g.
+     private customer channels where nobody can invite the bot. Create a
+     separate no-bot Slack app with **User Token Scopes** `channels:history`,
+     `groups:history`, `channels:read`, `groups:read`, `users:read`, install
+     it, and copy its User OAuth Token. The token reads whatever its user can
+     read — invisible to the channel, no invites needed. Channels the bot
+     **is** in keep using the bot token.
 
 ## Run it
 
