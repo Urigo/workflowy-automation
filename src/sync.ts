@@ -1,5 +1,6 @@
 /** Core sync logic: diff issues/comments against seen-state, create bullets, persist. */
 
+import { discoverNewChannels } from "./channel-discovery.ts";
 import { env, repoConfigs, slackChannelConfigs, type RepoConfig } from "./config.ts";
 import {
   fetchIssue,
@@ -364,6 +365,8 @@ export async function runOnce(): Promise<void> {
     }
   }
   const slackTotal = await syncSlackChannels();
+  // Once a day: surface workspace channels that config.json doesn't list yet.
+  await discoverNewChannels();
 
   const stamp = new Date().toISOString();
   const parts = [

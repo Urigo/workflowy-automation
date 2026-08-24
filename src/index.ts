@@ -10,6 +10,7 @@
  */
 
 import meow from "meow";
+import { discoverNewChannels } from "./channel-discovery.ts";
 import { env, repoConfigs, slackChannelConfigs } from "./config.ts";
 import { runOnce } from "./sync.ts";
 import { errorMessage } from "./util.ts";
@@ -18,16 +19,24 @@ import { nodeLabel, prefetchNodeNames } from "./workflowy.ts";
 const cli = meow(
   `
   Usage
-    $ workflowy-github-sync            Poll continuously
-    $ workflowy-github-sync --once     Check once and exit (for cron)
+    $ workflowy-github-sync                       Poll continuously
+    $ workflowy-github-sync --once                Check once and exit (for cron)
+    $ workflowy-github-sync --discover-channels   List Slack channels missing from config.json and exit
 `,
   {
     importMeta: import.meta,
-    flags: { once: { type: "boolean", default: false } },
+    flags: {
+      once: { type: "boolean", default: false },
+      discoverChannels: { type: "boolean", default: false },
+    },
   },
 );
 
 console.log(`workflowy-github-sync`);
+if (cli.flags.discoverChannels) {
+  await discoverNewChannels(true);
+  process.exit(0);
+}
 // Resolve the configured Workflowy node ids to names so the banner is readable.
 await prefetchNodeNames([
   ...repoConfigs.flatMap((c) => [c.parentId, ...(c.searchRootId === undefined ? [] : [c.searchRootId])]),

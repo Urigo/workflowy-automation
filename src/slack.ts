@@ -126,6 +126,42 @@ export async function fetchUserChannelIds(): Promise<Set<string>> {
   return fetchMemberChannelIds(slackUser);
 }
 
+/** A channel as seen by the discovery check (id, name, visibility). */
+export interface SlackChannelInfo {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+}
+
+/**
+ * Every non-archived channel visible to the bot (all public ones plus private
+ * ones it's in), and — when a user token is configured — the private channels
+ * that token's user is a member of. Used to spot channels missing from
+ * config.json.
+ */
+export async function fetchAllVisibleChannels(): Promise<Map<string, SlackChannelInfo>> {
+  const channels = new Map<string, SlackChannelInfo>();
+  const collect = async (client: SlackClient, method: string): Promise<void> => {
+    let cursor: string | undefined;
+    do {
+      const res = await slackGet<{ channels: { id: string; name?: string; is_private?: boolean }[] }>(client, method, {
+        types: "public_channel,private_channel",
+        exclude_archived: "true",
+        limit: "200",
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      for (const c of res.channels) {
+        channels.set(c.id, { id: c.id, name: c.name ?? c.id, isPrivate: c.is_private ?? false });
+        if (c.name !== undefined) channelNames.set(c.id, c.name);
+      }
+      cursor = res.response_metadata?.next_cursor || undefined;
+    } while (cursor !== undefined);
+  };
+  await collect(slackBot, "conversations.list");
+  if (slackUser !== undefined) await collect(slackUser, "users.conversations");
+  return channels;
+}
+
 let allChannelNamesLoaded = false;
 
 /** Loads every visible channel's name into the cache (a few list requests). */

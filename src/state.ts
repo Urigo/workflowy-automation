@@ -54,6 +54,8 @@ interface StateFile {
   repos: Record<string, RepoState>;
   /** Keyed by Slack channel id. Absent in pre-Slack state files. */
   slackChannels?: Record<string, ChannelState>;
+  /** Bookkeeping for the daily "new channels missing from config.json" check. */
+  channelDiscovery?: { lastRunAt?: number };
 }
 
 export const db = await JSONFilePreset<StateFile>(

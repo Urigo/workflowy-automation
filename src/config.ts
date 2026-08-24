@@ -142,6 +142,8 @@ function stripJsonComments(text: string): string {
 interface LoadedConfigs {
   repos: RepoConfig[];
   slackChannels: SlackChannelConfig[];
+  /** Every channel id listed in config.json, track:false entries included. */
+  knownSlackChannelIds: Set<string>;
 }
 
 function loadConfigs(): LoadedConfigs {
@@ -173,6 +175,10 @@ function loadConfigs(): LoadedConfigs {
       );
     }
     const { defaults, repos, slackChannels } = parsed.data;
+    // All listed ids (tracked or not) — channel discovery treats these as known.
+    const knownSlackChannelIds = new Set(
+      (slackChannels ?? []).flatMap((c) => c.channel.split(",").map((id) => id.trim())),
+    );
     // "channel" may hold several comma-separated ids — one config per id.
     // track:false keeps a channel listed in config.json without syncing it.
     const channels = (slackChannels ?? [])
@@ -211,6 +217,7 @@ function loadConfigs(): LoadedConfigs {
         };
       }),
       slackChannels: channels,
+      knownSlackChannelIds,
     };
   }
 
@@ -222,9 +229,11 @@ function loadConfigs(): LoadedConfigs {
   return {
     repos: repos.map((repo) => ({ repo, parentId: env.WORKFLOWY_PARENT_ID, trackPullRequests: true })),
     slackChannels: [],
+    knownSlackChannelIds: new Set(),
   };
 }
 
 const configs = loadConfigs();
 export const repoConfigs = configs.repos;
 export const slackChannelConfigs = configs.slackChannels;
+export const knownSlackChannelIds = configs.knownSlackChannelIds;
