@@ -28,7 +28,8 @@ comments:
   parent, with the full text in a sub-bullet when it doesn't fit the bullet
   name. The bullet text links to the original message in Slack. Bot messages
   are synced like any other (some channels, e.g. Crisp relays, speak entirely
-  through bots); system messages (joins, pins, …) are skipped.
+  through bots) unless the channel sets `bots: false`; system messages (joins,
+  pins, …) are skipped.
 - **New thread reply** on a tracked message → a `💬` sub-bullet under it,
   linking to the reply in its thread.
 - **New thread reply on a message that isn't in Workflowy yet** (e.g. one that
@@ -162,6 +163,11 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
      is only checked hourly. The first message in a dormant channel therefore
      appears within the hour — and the channel is back to being checked every
      poll from then on.
+   - **`bots`** _(optional, default `true`)_ — set to `false` to skip messages
+     posted by apps and integrations (RSS/status feeds, notification bots) so
+     only people's messages become bullets. Threads under skipped bot posts
+     aren't watched either. Leave it on for channels that speak through a
+     bot on purpose (e.g. Crisp relays).
    - **`track`** _(optional, default `true`)_ — set to `false` to keep a
      channel listed in the config without syncing it. Handy for maintaining a
      complete channel inventory while only tracking some of them.

@@ -13,6 +13,7 @@
   "slackChannels": [
     { "channel": "C0123ABCDE", "parentId": "node-id-for-this-channels-messages" }, // #ext-some-customer
     { "channel": "C0456FGHIJ, C0789KLMNO", "parentId": "node-id-shared-by-these-channels", "lookbackDays": 14 },
+    { "channel": "C0PQRSTUVW", "bots": false }, // #ext-vendor — skip status/RSS feed bots
     { "channel": "C0ABCDEFGH", "track": false } // listed but not synced
   ]
 }

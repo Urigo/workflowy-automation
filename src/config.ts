@@ -65,6 +65,8 @@ export interface SlackChannelConfig {
   parentId: string;
   /** How many days back channel threads are watched for new replies. */
   lookbackDays: number;
+  /** Whether bot-posted messages (feeds, integrations) become bullets. */
+  syncBots: boolean;
 }
 
 const configFileSchema = z.object({
@@ -98,6 +100,7 @@ const configFileSchema = z.object({
           ),
         parentId: z.string().min(1).optional(),
         lookbackDays: z.number().int().positive().optional(),
+        bots: z.boolean().optional(),
         track: z.boolean().optional(),
       }),
     )
@@ -188,6 +191,7 @@ function loadConfigs(): LoadedConfigs {
           channel: id.trim(),
           parentId: c.parentId ?? defaults?.parentId ?? env.WORKFLOWY_PARENT_ID,
           lookbackDays: c.lookbackDays ?? 300,
+          syncBots: c.bots ?? true,
         })),
       );
     if (channels.length > 0 && env.SLACK_BOT_TOKEN === "") {

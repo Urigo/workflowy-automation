@@ -51,7 +51,8 @@ if (slackChannelConfigs.length > 10) {
   console.log(`  Slack: ${slackChannelConfigs.length} channel(s) tracked (only those the bot is in are polled)`);
 } else {
   for (const cfg of slackChannelConfigs) {
-    console.log(`  Slack ${cfg.channel} → ${nodeLabel(cfg.parentId)} (threads watched ${cfg.lookbackDays}d back)`);
+    const botsNote = cfg.syncBots ? "" : ", bots skipped";
+    console.log(`  Slack ${cfg.channel} → ${nodeLabel(cfg.parentId)} (threads watched ${cfg.lookbackDays}d back${botsNote})`);
   }
 }
 console.log(`  Mode: ${cli.flags.once ? "run once" : `poll every ${env.POLL_INTERVAL_MINUTES} min`} (${env.WORKFLOWY_LAYOUT_MODE})\n`);

@@ -42,14 +42,23 @@ function tsToWhen(ts: string): string {
   return new Date(Number(ts.split(".")[0]) * 1000).toISOString().slice(0, 16).replace("T", " ");
 }
 
+/** Messages posted by an app/integration rather than a person. */
+function isBotMessage(msg: SlackMessage): boolean {
+  return msg.bot_id !== undefined || msg.subtype === "bot_message";
+}
+
 /**
  * Channel messages that should become bullets: top-level, non-empty messages.
- * Bot messages count too — channels like #crisp-chats relay whole customer
- * conversations through a bot. System messages (joins, pins, …) don't.
+ * Bot messages count too by default — channels like #crisp-chats relay whole
+ * customer conversations through a bot — but a channel can opt out with
+ * `bots: false` (e.g. one flooded by status/RSS feeds). Filtering bot posts
+ * here also stops their threads from being watched. System messages (joins,
+ * pins, …) never count.
  */
-function isTopLevelMessage(msg: SlackMessage): boolean {
+function isTopLevelMessage(cfg: SlackChannelConfig, msg: SlackMessage): boolean {
   return (
     (msg.subtype === undefined || msg.subtype === "bot_message") &&
+    (cfg.syncBots || !isBotMessage(msg)) &&
     (msg.thread_ts === undefined || msg.thread_ts === msg.ts) &&
     (msg.text?.trim() ?? "") !== ""
   );
@@ -226,7 +235,7 @@ async function syncChannel(cfg: SlackChannelConfig): Promise<SlackSyncCounts> {
     now - (state.lastFullSweepAt ?? 0) >= FULL_SWEEP_INTERVAL_MS;
   const windowDays = sweepDue ? cfg.lookbackDays : Math.min(RECENT_WINDOW_DAYS, cfg.lookbackDays);
   const oldest = String(Math.floor(now / 1000) - windowDays * 24 * 60 * 60);
-  const parents = (await fetchChannelMessages(cfg.channel, oldest)).filter(isTopLevelMessage);
+  const parents = (await fetchChannelMessages(cfg.channel, oldest)).filter((m) => isTopLevelMessage(cfg, m));
   if (sweepDue) state.lastFullSweepAt = now;
   state.lastPolledAt = now;
   for (const m of parents) {
@@ -254,9 +263,7 @@ async function syncChannel(cfg: SlackChannelConfig): Promise<SlackSyncCounts> {
   if (!state.botMessagesInitialized) {
     state.botMessagesInitialized = true;
     if (!env.BACKFILL_EXISTING) {
-      const bots = parents.filter(
-        (m) => (m.bot_id !== undefined || m.subtype === "bot_message") && !state.seen.includes(m.ts),
-      );
+      const bots = parents.filter((m) => isBotMessage(m) && !state.seen.includes(m.ts));
       for (const m of bots) {
         state.seen.push(m.ts);
         if (m.latest_reply !== undefined) (state.lastReplyTs ??= {})[m.ts] = m.latest_reply;
