@@ -1,6 +1,6 @@
 /** Core sync logic: diff issues/comments against seen-state, create bullets, persist. */
 
-import { discoverNewChannels } from "./channel-discovery.ts";
+import { discoverNewChannels, pendingDecisionSummary } from "./channel-discovery.ts";
 import { env, repoConfigs, slackChannelConfigs, type RepoConfig } from "./config.ts";
 import {
   fetchIssue,
@@ -382,4 +382,7 @@ export async function runOnce(): Promise<void> {
   const slackSuffix = slackChannelConfigs.length > 0 ? ` and ${slackChannelConfigs.length} Slack channel(s)` : "";
   if (parts.length > 0) console.log(`[${stamp}] Done — ${parts.join(", ")}.`);
   else console.log(`[${stamp}] Checked ${repoConfigs.length} repo(s)${slackSuffix} — nothing new.`);
+  // Repeated every poll so it can't scroll out of sight before it's acted on.
+  const undecided = pendingDecisionSummary();
+  if (undecided !== undefined) console.log(undecided);
 }

@@ -50,12 +50,31 @@ export interface ChannelState {
   lastActivityTs?: string;
 }
 
+/** A discovered channel waiting for a track/ignore decision in Workflowy. */
+export interface PendingChannel {
+  name: string;
+  isPrivate: boolean;
+  /** When (epoch ms) the channel was first seen. */
+  since: number;
+  /** Workflowy id of the "Track #channel?" bullet, once created. */
+  askNodeId?: string;
+}
+
+export interface DiscoveryState {
+  /** When (epoch ms) the workspace channel list was last diffed against config.json. */
+  lastRunAt?: number;
+  /** Workflowy id of the "🆕 New Slack channels" bullet the questions live under. */
+  inboxNodeId?: string;
+  /** Keyed by Slack channel id. */
+  pending?: Record<string, PendingChannel>;
+}
+
 interface StateFile {
   repos: Record<string, RepoState>;
   /** Keyed by Slack channel id. Absent in pre-Slack state files. */
   slackChannels?: Record<string, ChannelState>;
   /** Bookkeeping for the daily "new channels missing from config.json" check. */
-  channelDiscovery?: { lastRunAt?: number };
+  channelDiscovery?: DiscoveryState;
 }
 
 export const db = await JSONFilePreset<StateFile>(

@@ -1,6 +1,6 @@
 /** Loads .env + config.json and validates all settings; exports the typed config. */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { config as loadDotenv } from "dotenv";
 import { bool, cleanEnv, num, str } from "envalid";
@@ -89,6 +89,13 @@ const configFileSchema = z.object({
       }),
     )
     .min(1),
+  // How newly discovered Slack channels (not listed below) are handled.
+  discovery: z
+    .object({
+      parentId: z.string().min(1).optional(),
+      autoTrack: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
   slackChannels: z
     .array(
       z.object({
@@ -147,6 +154,19 @@ interface LoadedConfigs {
   slackChannels: SlackChannelConfig[];
   /** Every channel id listed in config.json, track:false entries included. */
   knownSlackChannelIds: Set<string>;
+  discovery: DiscoveryConfig;
+  /** Absolute path of config.json (undefined in legacy .env mode). */
+  configFile?: string;
+  /** Workflowy parent for channels added at runtime (defaults.parentId). */
+  slackParentId: string;
+}
+
+/** How channels found in the workspace but missing from config.json are handled. */
+export interface DiscoveryConfig {
+  /** Workflowy node the "🆕 New Slack channels" decision bullet is created under. */
+  parentId: string;
+  /** Channel-name prefixes that are tracked right away instead of asked about. */
+  autoTrack: string[];
 }
 
 function loadConfigs(): LoadedConfigs {
@@ -177,7 +197,8 @@ function loadConfigs(): LoadedConfigs {
           parsed.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n"),
       );
     }
-    const { defaults, repos, slackChannels } = parsed.data;
+    const { defaults, repos, slackChannels, discovery } = parsed.data;
+    const slackParentId = defaults?.parentId ?? env.WORKFLOWY_PARENT_ID;
     // All listed ids (tracked or not) — channel discovery treats these as known.
     const knownSlackChannelIds = new Set(
       (slackChannels ?? []).flatMap((c) => c.channel.split(",").map((id) => id.trim())),
@@ -222,6 +243,12 @@ function loadConfigs(): LoadedConfigs {
       }),
       slackChannels: channels,
       knownSlackChannelIds,
+      discovery: {
+        parentId: discovery?.parentId ?? slackParentId,
+        autoTrack: discovery?.autoTrack ?? [],
+      },
+      configFile: file,
+      slackParentId,
     };
   }
 
@@ -234,6 +261,8 @@ function loadConfigs(): LoadedConfigs {
     repos: repos.map((repo) => ({ repo, parentId: env.WORKFLOWY_PARENT_ID, trackPullRequests: true })),
     slackChannels: [],
     knownSlackChannelIds: new Set(),
+    discovery: { parentId: env.WORKFLOWY_PARENT_ID, autoTrack: [] },
+    slackParentId: env.WORKFLOWY_PARENT_ID,
   };
 }
 
@@ -241,3 +270,105 @@ const configs = loadConfigs();
 export const repoConfigs = configs.repos;
 export const slackChannelConfigs = configs.slackChannels;
 export const knownSlackChannelIds = configs.knownSlackChannelIds;
+export const discoveryConfig = configs.discovery;
+
+/** A channel to append to config.json's slackChannels list. */
+export interface NewSlackChannelEntry {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+  /** false lists the channel as inventory (track: false) without syncing it. */
+  track: boolean;
+  /** Only for tracked channels: false writes bots: false (skip app posts). */
+  syncBots?: boolean;
+}
+
+/** The config.json line for one entry, following the file's conventions. */
+export function slackChannelEntryLine(e: NewSlackChannelEntry, trailingComma = true): string {
+  const opts = [e.track ? "" : ', "track": false', e.track && e.syncBots === false ? ', "bots": false' : ""].join("");
+  return `{ "channel": "${e.id}"${opts} }${trailingComma ? "," : ""} // #${e.name}${e.isPrivate ? " (private)" : ""}`;
+}
+
+/**
+ * Where the slackChannels array ends in the config text: the index of its
+ * closing "]", the index of the last significant character before it ("}" of
+ * the last entry, or "[" when empty), and the indentation of the entries.
+ * Walks the text like the comment stripper so strings and // comments
+ * containing brackets don't confuse it.
+ */
+function locateSlackChannelsArray(text: string): { close: number; lastSig: number; indent: string } {
+  const key = /"slackChannels"\s*:\s*\[/g;
+  const m = key.exec(text);
+  if (m === null) throw new Error('config.json has no "slackChannels" array');
+  const open = m.index + m[0].length - 1;
+  let depth = 0;
+  let lastSig = open;
+  let inString = false;
+  for (let i = open; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') inString = false;
+      lastSig = i;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === undefined || /\s/.test(ch)) continue;
+    if (ch === '"') inString = true;
+    else if (ch === "[" || ch === "{") depth++;
+    else if (ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) {
+        const lineStart = text.lastIndexOf("\n", lastSig) + 1;
+        const indent = /^\s*/.exec(text.slice(lineStart, lastSig))?.[0] ?? "    ";
+        return { close: i, lastSig, indent: lastSig === open ? "    " : indent };
+      }
+    }
+    lastSig = i;
+  }
+  throw new Error('config.json: unterminated "slackChannels" array');
+}
+
+/**
+ * Appends channel entries to config.json (under a dated comment, comments and
+ * formatting elsewhere untouched) and registers them in memory, so tracked
+ * ones are synced from the next poll on without a restart. The new text is
+ * validated against the schema before anything is written.
+ */
+export async function addSlackChannelEntries(entries: NewSlackChannelEntry[], reason: string): Promise<void> {
+  if (entries.length === 0) return;
+  const file = configs.configFile;
+  if (file === undefined) throw new Error("no config.json to update (legacy .env configuration)");
+
+  const text = readFileSync(file, "utf8");
+  const { close, lastSig, indent } = locateSlackChannelsArray(text);
+  const lineStart = text.lastIndexOf("\n", close - 1) + 1;
+  const closeOnOwnLine = text.slice(lineStart, close).trim() === "";
+  const insertAt = closeOnOwnLine ? lineStart : close;
+  const block =
+    `${indent}// Added by channel discovery ${new Date().toISOString().slice(0, 10)} (${reason})\n` +
+    entries.map((e, i) => `${indent}${slackChannelEntryLine(e, i < entries.length - 1)}\n`).join("");
+  const comma = text[lastSig] === "}" ? "," : "";
+  const updated =
+    text.slice(0, lastSig + 1) + comma + text.slice(lastSig + 1, insertAt) + (closeOnOwnLine ? "" : "\n") + block + text.slice(insertAt);
+
+  const check = configFileSchema.safeParse(JSON.parse(stripJsonComments(updated)));
+  if (!check.success) {
+    throw new Error(`updated config.json would be invalid: ${check.error.issues.map((i) => i.message).join("; ")}`);
+  }
+  writeFileSync(file, updated);
+
+  for (const e of entries) {
+    knownSlackChannelIds.add(e.id);
+    if (!e.track || slackChannelConfigs.some((c) => c.channel === e.id)) continue;
+    slackChannelConfigs.push({
+      channel: e.id,
+      parentId: configs.slackParentId,
+      lookbackDays: 300,
+      syncBots: e.syncBots ?? true,
+    });
+  }
+}

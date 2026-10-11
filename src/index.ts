@@ -21,7 +21,7 @@ const cli = meow(
   Usage
     $ workflowy-github-sync                       Poll continuously
     $ workflowy-github-sync --once                Check once and exit (for cron)
-    $ workflowy-github-sync --discover-channels   List Slack channels missing from config.json and exit
+    $ workflowy-github-sync --discover-channels   Run channel discovery now (auto-track / ask in Workflowy) and exit
 `,
   {
     importMeta: import.meta,

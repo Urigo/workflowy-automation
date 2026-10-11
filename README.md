@@ -171,6 +171,28 @@ TypeScript itself is only used for type-checking (`npm run typecheck`).
    - **`track`** _(optional, default `true`)_ — set to `false` to keep a
      channel listed in the config without syncing it. Handy for maintaining a
      complete channel inventory while only tracking some of them.
+   - **New channels are discovered automatically.** Once a day the sync diffs
+     the workspace's channel list against `config.json` (run it on demand
+     with `--discover-channels`). Channels not listed yet are handled by the
+     optional top-level **`discovery`** section:
+     ```jsonc
+     "discovery": {
+       "parentId": "node-id-for-the-decision-bullet", // default: defaults.parentId
+       "autoTrack": ["ext-"] // name prefixes tracked right away, no question asked
+     }
+     ```
+     Channels matching an `autoTrack` prefix are appended to `config.json` as
+     tracked and synced from the next poll on. Every other new channel gets a
+     "Track #channel?" bullet under a **🆕 New Slack channels** bullet (created
+     under `discovery.parentId`). Answer in Workflowy: add the tag `#track` to
+     sync the channel (`#track #nobots` to also skip app posts), or delete the
+     bullet / add `#ignore` to list it as `track: false`. Answers are picked
+     up within a poll, written to `config.json` under a dated comment (the
+     rest of the file is left as is — commit it whenever convenient), and the
+     question bullet is removed. Deleting the whole inbox bullet is not an
+     answer: it's recreated and the open questions asked again. While
+     channels await a decision, every poll summary ends with a reminder line
+     listing them.
    - Instead of inviting the bot channel by channel, set
      `SLACK_AUTO_JOIN=true` in `.env` (needs the `channels:join` bot scope):
      each poll, the bot joins any **public** tracked channel it isn't in yet.

@@ -10,6 +10,9 @@
     { "repo": "my-org/docs", "pullRequests": false },
     { "repo": "other-org/private-repo", "tokenEnv": "GITHUB_TOKEN_OTHER_ORG" }
   ],
+  "discovery": {
+    "autoTrack": ["ext-"] // new channels whose name starts with ext- are tracked without asking; others are asked about in Workflowy
+  },
   "slackChannels": [
     { "channel": "C0123ABCDE", "parentId": "node-id-for-this-channels-messages" }, // #ext-some-customer
     { "channel": "C0456FGHIJ, C0789KLMNO", "parentId": "node-id-shared-by-these-channels", "lookbackDays": 14 },

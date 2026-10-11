@@ -1,6 +1,6 @@
 /** Workflowy client: creates/updates the bullets that mirror GitHub issues and Slack messages. */
 
-import ky from "ky";
+import ky, { HTTPError } from "ky";
 import { env } from "./config.ts";
 import type { GitHubIssue, IssueComment } from "./github.ts";
 
@@ -76,9 +76,39 @@ interface NewNode {
 }
 
 /** Creates a single Workflowy node and returns its id. */
-async function createNode(node: NewNode): Promise<string> {
+export async function createNode(node: NewNode): Promise<string> {
   const { item_id } = await workflowy.post("nodes", { json: node }).json<CreateNodeResponse>();
   return item_id;
+}
+
+/** A node as returned by the children listing. */
+export interface ChildNode {
+  id: string;
+  name: string | null;
+  note: string | null;
+  completed: boolean;
+}
+
+/** The direct children of a node. Throws a 404 (isNodeGone) when the parent was deleted. */
+export async function listChildren(parentId: string): Promise<ChildNode[]> {
+  const { nodes } = await workflowy.get("nodes", { searchParams: { parent_id: parentId } }).json<{ nodes: ChildNode[] }>();
+  return nodes;
+}
+
+/** Deletes a node (and its subtree). An already-deleted node is not an error. */
+export async function deleteNode(nodeId: string): Promise<void> {
+  try {
+    await workflowy.delete(`nodes/${nodeId}`);
+  } catch (err) {
+    if (!(err instanceof HTTPError && err.response.status === 404)) throw err;
+  }
+}
+
+/** Whether two ids name the same node — ids may be full uuids or the short last-12 form. */
+export function sameNode(a: string, b: string): boolean {
+  const x = a.replaceAll("-", "");
+  const y = b.replaceAll("-", "");
+  return x.slice(-12) === y.slice(-12);
 }
 
 /** Creates the task bullet for an issue or PR; returns the created task's node id. */
