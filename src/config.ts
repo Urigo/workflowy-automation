@@ -214,7 +214,13 @@ function loadConfigs(): LoadedConfigs {
           lookbackDays: c.lookbackDays ?? 300,
           syncBots: c.bots ?? true,
         })),
-      );
+      )
+      // A channel listed twice would be synced twice (racing on its state) — keep the first entry.
+      .filter((c, i, all) => {
+        const first = all.findIndex((o) => o.channel === c.channel) === i;
+        if (!first) console.warn(`⚠️  config.json lists Slack channel ${c.channel} more than once — using the first entry.`);
+        return first;
+      });
     if (channels.length > 0 && env.SLACK_BOT_TOKEN === "") {
       // Don't kill the GitHub sync over a missing Slack token — just skip Slack.
       console.warn(
@@ -344,22 +350,31 @@ export async function addSlackChannelEntries(entries: NewSlackChannelEntry[], re
   if (file === undefined) throw new Error("no config.json to update (legacy .env configuration)");
 
   const text = readFileSync(file, "utf8");
+  // Another process (a --discover-channels run beside the long-running sync)
+  // may have listed some of these since this process loaded the file.
+  const listed = new Set([...text.matchAll(/"channel"\s*:\s*"([^"]+)"/g)].flatMap((m) => (m[1] ?? "").split(",").map((id) => id.trim())));
+  const fresh = entries.filter((e) => !listed.has(e.id));
+  for (const e of entries) {
+    if (listed.has(e.id)) console.log(`ℹ️  #${e.name} is already listed in config.json — not added again.`);
+  }
   const { close, lastSig, indent } = locateSlackChannelsArray(text);
   const lineStart = text.lastIndexOf("\n", close - 1) + 1;
   const closeOnOwnLine = text.slice(lineStart, close).trim() === "";
   const insertAt = closeOnOwnLine ? lineStart : close;
   const block =
     `${indent}// Added by channel discovery ${new Date().toISOString().slice(0, 10)} (${reason})\n` +
-    entries.map((e, i) => `${indent}${slackChannelEntryLine(e, i < entries.length - 1)}\n`).join("");
+    fresh.map((e, i) => `${indent}${slackChannelEntryLine(e, i < fresh.length - 1)}\n`).join("");
   const comma = text[lastSig] === "}" ? "," : "";
   const updated =
     text.slice(0, lastSig + 1) + comma + text.slice(lastSig + 1, insertAt) + (closeOnOwnLine ? "" : "\n") + block + text.slice(insertAt);
 
-  const check = configFileSchema.safeParse(JSON.parse(stripJsonComments(updated)));
-  if (!check.success) {
-    throw new Error(`updated config.json would be invalid: ${check.error.issues.map((i) => i.message).join("; ")}`);
+  if (fresh.length > 0) {
+    const check = configFileSchema.safeParse(JSON.parse(stripJsonComments(updated)));
+    if (!check.success) {
+      throw new Error(`updated config.json would be invalid: ${check.error.issues.map((i) => i.message).join("; ")}`);
+    }
+    writeFileSync(file, updated);
   }
-  writeFileSync(file, updated);
 
   for (const e of entries) {
     knownSlackChannelIds.add(e.id);
